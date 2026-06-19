@@ -1,0 +1,47 @@
+{
+  "id": "https://openalex.org/W4500000099",
+  "doi": "https://doi.org/10.48550/arxiv.2512.02556",
+  "title": "DeepSeek-V3.2: Pushing the Frontier of Open Large Language Models",
+  "display_name": "DeepSeek-V3.2: Pushing the Frontier of Open Large Language Models",
+  "publication_date": "2025-12-02",
+  "cited_by_count": 0,
+  "type": "preprint",
+  "primary_location": {
+    "landing_page_url": "https://arxiv.org/abs/2512.02556"
+  },
+  "abstract_inverted_index": {
+    "We": [0],
+    "present": [1],
+    "DeepSeek-V3.2,": [2],
+    "a": [3],
+    "large": [4],
+    "language": [5],
+    "model.": [6]
+  },
+  "authorships": [
+    {
+      "author": {
+        "id": "https://openalex.org/A5099000001",
+        "display_name": "DeepSeek-AI"
+      },
+      "institutions": [],
+      "raw_affiliation_strings": []
+    },
+    {
+      "author": {
+        "id": "https://openalex.org/A5099000002",
+        "display_name": "Aixin Liu"
+      },
+      "institutions": [],
+      "raw_affiliation_strings": []
+    },
+    {
+      "author": {
+        "id": "https://openalex.org/A5099000003",
+        "display_name": "Bingxuan Wang"
+      },
+      "institutions": [],
+      "affiliations": []
+    }
+  ]
+}

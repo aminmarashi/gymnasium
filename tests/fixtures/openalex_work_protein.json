@@ -1,0 +1,51 @@
+{
+  "id": "https://openalex.org/W4400000099",
+  "doi": "https://doi.org/10.1038/s41598-026-45768-8",
+  "title": "Exploring the conformational landscape of adenylate kinase and beyond with protein folding models",
+  "display_name": "Exploring the conformational landscape of adenylate kinase and beyond with protein folding models",
+  "publication_date": "2026-06-01",
+  "cited_by_count": 0,
+  "type": "article",
+  "primary_location": {
+    "landing_page_url": "https://www.nature.com/articles/s41598-026-45768-8"
+  },
+  "abstract_inverted_index": {
+    "Protein": [0],
+    "folding": [1],
+    "models": [2],
+    "use": [3],
+    "diffusion-based": [4],
+    "generative": [5],
+    "approaches.": [6]
+  },
+  "primary_topic": {
+    "id": "https://openalex.org/T10093",
+    "display_name": "Protein Structure and Dynamics",
+    "subfield": {"id": "https://openalex.org/subfields/1312", "display_name": "Molecular Biology"},
+    "field": {"id": "https://openalex.org/fields/13", "display_name": "Biochemistry, Genetics and Molecular Biology"},
+    "domain": {"id": "https://openalex.org/domains/1", "display_name": "Life Sciences"}
+  },
+  "topics": [
+    {
+      "id": "https://openalex.org/T10093",
+      "display_name": "Protein Structure and Dynamics",
+      "subfield": {"display_name": "Molecular Biology"},
+      "field": {"display_name": "Biochemistry, Genetics and Molecular Biology"},
+      "domain": {"display_name": "Life Sciences"}
+    },
+    {
+      "id": "https://openalex.org/T11430",
+      "display_name": "Machine Learning in Bioinformatics",
+      "subfield": {"display_name": "Artificial Intelligence"},
+      "field": {"display_name": "Computer Science"},
+      "domain": {"display_name": "Physical Sciences"}
+    }
+  ],
+  "authorships": [
+    {
+      "author": {"id": "https://openalex.org/A5000000099", "display_name": "Aryan Bhasin"},
+      "institutions": [{"id": "https://openalex.org/I4210090411", "display_name": "Google DeepMind"}],
+      "raw_affiliation_strings": ["Google DeepMind, London, UK"]
+    }
+  ]
+}

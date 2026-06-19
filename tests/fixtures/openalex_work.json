@@ -1,0 +1,42 @@
+{
+  "id": "https://openalex.org/W4400000001",
+  "doi": "https://doi.org/10.48550/arxiv.2606.01234",
+  "title": "Scaling Instruction-Tuned Language Models for Reasoning",
+  "display_name": "Scaling Instruction-Tuned Language Models for Reasoning",
+  "publication_date": "2026-06-17",
+  "cited_by_count": 3,
+  "type": "preprint",
+  "primary_location": {
+    "landing_page_url": "https://arxiv.org/abs/2606.01234"
+  },
+  "abstract_inverted_index": {
+    "We": [0],
+    "study": [1],
+    "reasoning": [2],
+    "in": [3],
+    "language": [4],
+    "models.": [5]
+  },
+  "authorships": [
+    {
+      "author": {
+        "id": "https://openalex.org/A5000000001",
+        "display_name": "Ada Researcher"
+      },
+      "institutions": [
+        {"id": "https://openalex.org/I4210161460", "display_name": "OpenAI"}
+      ],
+      "raw_affiliation_strings": ["OpenAI, San Francisco, CA"]
+    },
+    {
+      "author": {
+        "id": "https://openalex.org/A5000000002",
+        "display_name": "Bob Scientist"
+      },
+      "institutions": [],
+      "affiliations": [
+        {"raw_affiliation_string": "DeepSeek-AI, Beijing, China"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <title type="html">ArXiv Query</title>
+  <id>http://arxiv.org/api/test</id>
+  <updated>2026-06-18T00:00:00-04:00</updated>
+  <opensearch:totalResults xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">2</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/abs/2606.01234v2</id>
+    <updated>2026-06-18T10:00:00Z</updated>
+    <published>2026-06-17T09:30:00Z</published>
+    <title>Scaling Instruction-Tuned Language Models for Reasoning</title>
+    <summary>  We study how large language models acquire reasoning ability through
+instruction tuning and chain-of-thought supervision. Our agent framework
+improves tool use across multimodal tasks.
+</summary>
+    <author>
+      <name>Ada Researcher</name>
+    </author>
+    <author>
+      <name>Bob Scientist</name>
+    </author>
+    <arxiv:doi>10.1000/journal.2026.42</arxiv:doi>
+    <link href="http://arxiv.org/abs/2606.01234v2" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2606.01234v2" rel="related" type="application/pdf"/>
+    <arxiv:primary_category xmlns:arxiv="http://arxiv.org/schemas/atom" term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2606.05678v1</id>
+    <updated>2026-06-16T12:00:00Z</updated>
+    <published>2026-06-16T08:00:00Z</published>
+    <title>A Numerical Method for Fluid Dynamics on Sparse Grids</title>
+    <summary>  We present a finite-element solver for incompressible flow. This work has
+no relevance to generative modelling whatsoever.
+</summary>
+    <author>
+      <name>Carol Engineer</name>
+    </author>
+    <link href="http://arxiv.org/abs/2606.05678v1" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2606.05678v1" rel="related" type="application/pdf"/>
+    <arxiv:primary_category xmlns:arxiv="http://arxiv.org/schemas/atom" term="math.NA" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.NA" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>
