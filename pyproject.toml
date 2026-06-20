@@ -21,9 +21,10 @@ dev = ["pytest>=7.0"]
 
 [project.scripts]
 labpapers = "labpapers.cli:main"
+labrepos = "labrepos.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["labpapers*"]
+include = ["labpapers*", "labrepos*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

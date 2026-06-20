@@ -118,6 +118,84 @@ Useful flags:
 Run `labpapers --help` for the full list, and `pytest` to run the offline test
 suite (it uses saved fixtures — no live network).
 
+## labrepos — GitHub giant-attribution tracker
+
+`labrepos` is a self-contained sibling of `labpapers` that applies the same
+method to **GitHub** instead of arXiv/OpenAlex. It surfaces **new and
+recently-active repositories** created or contributed to by "giants" — the top
+AI research labs *and* the leading coding / dev-AI-tooling orgs and people — so
+you track the bleeding edge instead of re-discovering already-famous,
+mega-starred projects.
+
+The organizing principle is **giant-attribution + recency + topic**, mirroring
+labpapers' lab-attribution: a repo qualifies because it is owned by a configured
+giant org, or owned/recently-pushed-to by a watchlist person — not because it is
+popular. A configurable window (default 30 days) keeps it recent, and a STRICT
+GenAI/agentic-coding topic filter keeps it on-scope (broad orgs like
+`microsoft` / `facebookresearch` / `github` / `jetbrains` carry a lot of
+non-GenAI work). Instead of "giant-weight", a **freshness signal** floats the
+newest work to the top — repos are sorted by `(new-in-window, pushed_at, stars)`
+descending — while already-notable repos (stars ≥ 500 by default) get a 🌟, the
+GitHub analogue of the giant-author flag.
+
+Giants tracked (each separately selectable):
+
+- **Labs:** Anthropic, Meta, Google (incl. DeepMind), OpenAI, Z.AI/Zhipu,
+  DeepSeek.
+- **Coding / dev-AI:** Microsoft, GitHub (its own giant, not folded under
+  Microsoft), Cursor, Cline, OpenCode, OpenHands, Goose, Aider, Continue,
+  Sourcegraph, Roo Code, LangChain, LlamaIndex, CrewAI, Hugging Face, Vercel,
+  Mistral, Replit, JetBrains.
+
+### How it works (source-agnostic)
+
+Like labpapers, sourcing is source-agnostic: every source implements a small
+`RepoSource` protocol (`labrepos/sources/base.py`) and returns repos already
+tagged with the giant(s) it covers. The pipeline unions and dedups by repo
+`full_name` (a repo matched by several giants/sources carries all tags),
+computes the freshness signal, sorts, and groups. The sources are:
+
+- **Org repos** (primary) — for each giant org, a single `sort=pushed`
+  descending scan of `/orgs/{org}/repos` that **stops early** the moment it sees
+  a repo pushed before the window. Because GitHub guarantees
+  `pushed_at >= created_at`, this one pass is complete for the "new OR active"
+  definition (forks are dropped, since their `pushed_at` can reflect upstream).
+  The early stop is what bounds huge orgs without pulling every page.
+- **User repos** — repos *owned* by watchlist people (`labrepos/watchlist.py`),
+  same window + topic filtering; tagged to the synthetic **Watchlist people**
+  bucket (plus the owner's giant if it is itself configured).
+- **User events** — the "contributing to" signal: repos a watchlist person
+  recently pushed to (via the public Events API) but does not necessarily own.
+
+Every per-org/per-user lookup is best-effort: a 404 or error on one giant
+degrades coverage and is skipped, never fatal.
+
+### Install & usage
+
+```bash
+pip install -e .            # add ".[dev]" for the test deps
+
+labrepos --days 30
+GITHUB_TOKEN=$(gh auth token) labrepos --giants anthropic,cline
+```
+
+Set `GITHUB_TOKEN` (or `GH_TOKEN`) to avoid GitHub's 60 req/hr unauthenticated
+limit. Reports are written to `reports/` as `labrepos_<date>_<days>d.md` (repos
+grouped by giant, labs first then coding then watchlist people, sorted by
+freshness) plus a JSON sidecar. Useful flags:
+
+- `--days N` — lookback window (default 30)
+- `--giants anthropic,cline` — restrict to specific giant keys
+- `--no-keyword-filter` — keep every in-window repo (skip the topic filter)
+- `--include-forks` — include forks (dropped by default)
+- `--notable-stars N` — star threshold for the 🌟 mark (default 500)
+- `--no-people` — skip the watchlist-people sources
+- `--max-pages N`, `--format md|json|both`, `--out DIR`, `--cache-dir DIR`
+
+Run `labrepos --help` for the full list. The watchlist is a configurable starter
+set meant to be edited. The offline test suite (`pytest`) uses saved GitHub
+fixtures — no live network.
+
 ## Notes
 
 This is a private repository for personal study and research curation.
