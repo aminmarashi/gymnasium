@@ -1020,6 +1020,113 @@ def test_delete_added_item_and_protects_tracker(live_server, tmp_path):
     assert status == 404
 
 
+def _multipart_pdf(pdf_bytes, filename="paper.pdf", title=None):
+    """Build a multipart/form-data body with a binary PDF file part (+optional title)."""
+    boundary = "----gympdfboundary"
+    body = b"".join([
+        "--{}\r\n".format(boundary).encode(),
+        ('Content-Disposition: form-data; name="file"; '
+         'filename="{}"\r\n'.format(filename)).encode(),
+        b"Content-Type: application/pdf\r\n\r\n",
+        pdf_bytes,
+        b"\r\n",
+    ])
+    if title is not None:
+        body += b"".join([
+            "--{}\r\n".format(boundary).encode(),
+            b'Content-Disposition: form-data; name="title"\r\n\r\n',
+            title.encode(),
+            b"\r\n",
+        ])
+    body += "--{}--\r\n".format(boundary).encode()
+    return body, "multipart/form-data; boundary={}".format(boundary)
+
+
+def test_upload_pdf_creates_paper_converts_dedupes_and_removes(
+        live_server, tmp_path, monkeypatch):
+    base = live_server
+    _install_fake_markitdown(monkeypatch, text="# From PDF\n\nConverted text.")
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+
+    # A multipart PDF upload (no title) creates a kind=paper added item whose
+    # title falls back to the filename without its .pdf extension.
+    pdf = b"%PDF-1.4\nfake pdf body bytes\n%%EOF\n"
+    body, ctype = _multipart_pdf(pdf, filename="My Great Paper.pdf")
+    status, raw, _ = _http_raw("POST", base + "/api/items", data=body,
+                               content_type=ctype, cookie=cookie)
+    assert status == 200
+    res = json.loads(raw.decode())
+    assert res["kind"] == "paper"
+    pid = res["id"]
+
+    # Flagged added_by_user, source "Uploaded PDF", url NULL, doc_path -> source.pdf.
+    c = db.connect(str(tmp_path / "g.db"))
+    row = c.execute("SELECT * FROM corpus_item WHERE id=?", (pid,)).fetchone()
+    c.close()
+    assert row["added_by_user"] == 1
+    assert row["source"] == "Uploaded PDF"
+    assert row["url"] is None
+    assert row["title"] == "My Great Paper"
+    assert row["external_id"].startswith("pdf:")
+    assert os.path.basename(row["doc_path"]) == "source.pdf"
+    pdf_path = tmp_path / "documents" / row["doc_path"]
+    assert pdf_path.is_file() and pdf_path.read_bytes() == pdf
+
+    # It shows up in the Added feed but NOT in the tracker Papers feed.
+    status, added, _ = _http("GET", base + "/api/feed?added=1", cookie=cookie)
+    assert pid in [i["id"] for i in added["items"]]
+    status, papers, _ = _http("GET", base + "/api/feed?kind=paper", cookie=cookie)
+    assert pid not in [i["id"] for i in papers["items"]]
+
+    # The item advertises a convertible source and the markdown GET converts the
+    # stored source.pdf (stub markitdown) without trying to re-fetch a URL.
+    status, item, _ = _http("GET", base + "/api/item/{}".format(pid), cookie=cookie)
+    assert status == 200 and item["markdown_available"] is True
+    status, md, mctype = _http_raw(
+        "GET", base + "/api/item/{}/markdown".format(pid), cookie=cookie)
+    assert status == 200 and md.decode("utf-8") == "# From PDF\n\nConverted text."
+    assert "text/markdown" in mctype
+    # The stored PDF is untouched by ensure_document (url is NULL, no refetch).
+    assert pdf_path.read_bytes() == pdf
+
+    # An explicit title wins, and re-uploading the SAME bytes dedupes by content
+    # hash onto the same row instead of creating a duplicate.
+    body2, ctype2 = _multipart_pdf(pdf, filename="renamed.pdf", title="My Title")
+    status, raw2, _ = _http_raw("POST", base + "/api/items", data=body2,
+                                content_type=ctype2, cookie=cookie)
+    assert status == 200
+    res2 = json.loads(raw2.decode())
+    assert res2["id"] == pid  # same content -> same row
+    status, added, _ = _http("GET", base + "/api/feed?added=1", cookie=cookie)
+    assert [i["id"] for i in added["items"]].count(pid) == 1
+    assert next(i for i in added["items"] if i["id"] == pid)["title"] == "My Title"
+
+    # Different bytes -> a distinct item.
+    body3, ctype3 = _multipart_pdf(pdf + b"more", filename="other.pdf")
+    status, raw3, _ = _http_raw("POST", base + "/api/items", data=body3,
+                                content_type=ctype3, cookie=cookie)
+    assert json.loads(raw3.decode())["id"] != pid
+
+    # A multipart body with no file part -> 400.
+    nofile = (b"------b\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n"
+              b"x\r\n------b--\r\n")
+    status, _, _ = _http_raw("POST", base + "/api/items", data=nofile,
+                             content_type="multipart/form-data; boundary=----b",
+                             cookie=cookie)
+    assert status == 400
+
+    # DELETE removes the row AND its on-disk source.pdf folder.
+    doc_dir = pdf_path.parent
+    assert doc_dir.is_dir()
+    status, out, _ = _http("DELETE", base + "/api/items/{}".format(pid), cookie=cookie)
+    assert status == 200 and out["ok"] is True
+    status, added, _ = _http("GET", base + "/api/feed?added=1", cookie=cookie)
+    assert pid not in [i["id"] for i in added["items"]]
+    assert not doc_dir.exists()
+
+
 def test_delete_added_item_keeps_kb_entry(live_server, tmp_path):
     base = live_server
     status, _, setck = _http("POST", base + "/api/login",

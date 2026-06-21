@@ -237,11 +237,13 @@
       : '<div style="text-align:center;padding:44px 24px;color:var(--fg-3);font:500 15px/1.5 var(--font-sans)">No items yet. Paste an article or GitHub repo link above to add your first one.</div>';
     return '' +
       '<h1 style="font:700 32px/1.1 var(--font-display);letter-spacing:-.02em;color:var(--fg-1)">Added</h1>' +
-      '<p style="font:500 15px/1.5 var(--font-sans);color:var(--fg-3);margin-top:6px">Papers and repos you added with a link. Open one to read it like any other; remove one with the trash button.</p>' +
+      '<p style="font:500 15px/1.5 var(--font-sans);color:var(--fg-3);margin-top:6px">Papers and repos you added with a link, or a PDF you uploaded. Open one to read it like any other; remove one with the trash button.</p>' +
       '<form id="addForm" style="display:flex;flex-direction:column;gap:10px;margin:18px 0 22px;background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px;box-shadow:var(--shadow-1);padding:16px 18px">' +
         '<input class="gym-term-input" id="addUrl" type="url" placeholder="Paste an article or GitHub repo link…" autocomplete="off" />' +
         '<input class="gym-term-input" id="addTitle" type="text" placeholder="Title (optional)" autocomplete="off" />' +
-        '<div style="display:flex;justify-content:flex-end">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">' +
+          '<button class="gym-press" id="addPdfBtn" type="button" style="display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border:1px solid var(--border-hair);background:var(--bg-surface);border-radius:999px;cursor:pointer;font:700 13px/1 var(--font-sans);color:var(--fg-2)">' + ico(ICON.plus, 'style="width:15px;height:15px"') + 'Upload PDF</button>' +
+          '<input type="file" id="addPdf" accept=".pdf,application/pdf" hidden />' +
           '<button class="btn-spark" id="addBtn" type="submit">' + ico(ICON.plus, 'style="width:16px;height:16px;stroke-width:2.2"') + 'Add article</button>' +
         '</div>' +
       '</form>' +
@@ -268,6 +270,22 @@
       // Open the new article straight away (returning to Added on Back).
       if (res && res.id) { S.readerReturn = '#/added'; navigate('reader', { id: res.id }); }
     }).catch(function () { toast('Could not add'); if (btn) btn.disabled = false; });
+  }
+  function uploadPdf(file) {
+    if (!file) return;
+    var titleEl = $('addTitle');
+    var title = (titleEl && titleEl.value || '').trim();
+    var btn = $('addPdfBtn');
+    if (btn) btn.disabled = true;
+    toast('Uploading PDF…');
+    API.addItemFile(file, title).then(function (res) {
+      toast('PDF added');
+      loadAdded();
+      // Open the new paper straight away (returning to Added on Back).
+      if (res && res.id) { S.readerReturn = '#/added'; navigate('reader', { id: res.id }); }
+    }).catch(function () { toast('Could not upload PDF'); }).then(function () {
+      if (btn) btn.disabled = false;
+    });
   }
   function removeAdded(id) {
     if (!id) return;
@@ -1089,6 +1107,8 @@
       }
       var mdBtn = e.target.closest('#mdAttachBtn');
       if (mdBtn) { var inp = $('mdFile'); if (inp) inp.click(); return; }
+      var pdfBtn = e.target.closest('#addPdfBtn');
+      if (pdfBtn) { var pinp = $('addPdf'); if (pinp) pinp.click(); return; }
       if (e.target.closest('#chatArticleBtn')) { openChat(); return; }
       var term = e.target.closest('.gym-term');
       if (term) { openPanel(term.getAttribute('data-term'), 'explain'); return; }
@@ -1106,6 +1126,10 @@
     $('screen').addEventListener('change', function (e) {
       if (e.target.id === 'mdFile' && e.target.files && e.target.files[0]) {
         attachMarkdown(e.target.files[0]);
+        e.target.value = '';
+      }
+      if (e.target.id === 'addPdf' && e.target.files && e.target.files[0]) {
+        uploadPdf(e.target.files[0]);
         e.target.value = '';
       }
       var filt = e.target.closest && e.target.closest('.feed-filter');

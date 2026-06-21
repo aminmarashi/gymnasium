@@ -305,6 +305,28 @@ def remove_item_dir(item: sqlite3.Row, docs_dir: str) -> None:
         print("[docs] remove dir failed for item {}: {}".format(item["id"], exc))
 
 
+def store_uploaded_pdf(item: sqlite3.Row, data: bytes, docs_dir: str) -> str:
+    """Store an uploaded PDF as ``papers/<slug>/source.pdf`` and return its rel path.
+
+    Used for user-uploaded papers: there is no upstream URL to fetch, so the
+    bytes the user provided are the authoritative source document. The caller
+    points ``corpus_item.doc_path`` straight at the returned path so
+    ``ensure_document`` never tries to re-fetch it. Overwrites any prior file
+    (re-uploading identical bytes is idempotent).
+    """
+    try:
+        raw = json.loads(item["raw_json"]) if item["raw_json"] else {}
+    except (ValueError, TypeError):
+        raw = {}
+    slug = _paper_dir_slug(item, raw)
+    rel_dir = os.path.join("papers", slug)
+    abs_dir = os.path.join(docs_dir, rel_dir)
+    os.makedirs(abs_dir, exist_ok=True)
+    with open(os.path.join(abs_dir, "source.pdf"), "wb") as fh:
+        fh.write(data)
+    return os.path.join(rel_dir, "source.pdf")
+
+
 def save_markdown(item: sqlite3.Row, content: str, docs_dir: str) -> str:
     """Write uploaded markdown as ``article.md`` in the item's doc folder.
 

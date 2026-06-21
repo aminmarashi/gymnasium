@@ -8,6 +8,7 @@ lock (fine for a single-user personal tool). Every /api/* route except
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
@@ -347,12 +348,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"items": [self._item_dict(r) for r in items]})
 
     def _api_items_create(self):
-        """Create (or update) a user-added item (paper OR GitHub repo) from a link.
+        """Create (or update) a user-added item from a link OR an uploaded PDF.
 
-        Kind-aware: a ``github.com/<owner>/<name>`` URL becomes a ``repo`` whose
-        ``raw_json`` carries owner/name/full_name/html_url so the existing
-        ``ensure_document`` repo path fetches the README and the reader renders it
-        as markdown. Any other URL stays a ``paper`` exactly as before.
+        Branches on the request Content-Type: a ``multipart/form-data`` body is
+        a PDF file upload (handled by ``_create_pdf_item``); otherwise a JSON
+        ``{url, title?}`` body adds a paper or GitHub repo from a link.
+
+        Kind-aware (link path): a ``github.com/<owner>/<name>`` URL becomes a
+        ``repo`` whose ``raw_json`` carries owner/name/full_name/html_url so the
+        existing ``ensure_document`` repo path fetches the README and the reader
+        renders it as markdown. Any other URL stays a ``paper`` exactly as before.
 
         Deduped by ``external_id`` (the repo full_name, or the URL for a paper)
         so re-adding the same link updates the existing row instead of
@@ -360,6 +365,9 @@ class Handler(BaseHTTPRequestHandler):
         best-effort page <title>/og:title then the URL host, or — for a repo —
         the ``owner/name`` full_name.
         """
+        ctype = (self.headers.get("Content-Type") or "").lower()
+        if "multipart/form-data" in ctype:
+            return self._create_pdf_item(ctype)
         data = self._read_json()
         url = (data.get("url") or "").strip()
         if not url:
@@ -422,6 +430,62 @@ class Handler(BaseHTTPRequestHandler):
                 item_id = int(cur.lastrowid)
             self.ctx.conn.commit()
         self._send_json({"ok": True, "id": item_id, "kind": "repo"})
+
+    def _create_pdf_item(self, ctype: str):
+        """Create (or update) a user-added paper from an uploaded PDF file.
+
+        The PDF bytes are the authoritative source — there is no upstream URL —
+        so we store them as ``papers/<slug>/source.pdf`` and point ``doc_path``
+        straight at the file. ``external_id`` is derived from the file CONTENT
+        hash, so re-uploading the same bytes updates the existing row (dedupe)
+        instead of creating a duplicate. The title is the provided one, else the
+        uploaded filename without its ``.pdf`` extension. The reader's existing
+        markitdown auto-conversion then turns ``source.pdf`` into markdown on
+        first open.
+        """
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return self._send_json({"error": "empty body"}, status=400)
+        if length > _MAX_PDF:
+            return self._send_json({"error": "too large"}, status=413)
+        raw = self.rfile.read(length)
+        parsed = _parse_multipart_form(raw, ctype)
+        pdf = parsed["file"]
+        if not pdf:
+            return self._send_json({"error": "no file field"}, status=400)
+        title = (parsed["fields"].get("title") or "").strip()
+        if not title:
+            base = os.path.basename(parsed["filename"] or "")
+            if base.lower().endswith(".pdf"):
+                base = base[:-4]
+            title = base.strip() or "Uploaded PDF"
+        external_id = "pdf:" + hashlib.sha256(pdf).hexdigest()[:32]
+        now = utcnow()
+        with self.ctx.lock:
+            existing = self.ctx.conn.execute(
+                "SELECT id FROM corpus_item WHERE kind='paper' AND external_id=?",
+                (external_id,)).fetchone()
+            if existing is not None:
+                item_id = int(existing["id"])
+                self.ctx.conn.execute(
+                    "UPDATE corpus_item SET title=?, source=?, url=NULL, "
+                    "added_by_user=1, published_at=?, ingested_at=? WHERE id=?",
+                    (title, "Uploaded PDF", now, now, item_id))
+            else:
+                cur = self.ctx.conn.execute(
+                    "INSERT INTO corpus_item (kind, external_id, title, source, url, "
+                    "signal, added_by_user, published_at, ingested_at) "
+                    "VALUES ('paper', ?, ?, 'Uploaded PDF', NULL, 0, 1, ?, ?)",
+                    (external_id, title, now, now))
+                item_id = int(cur.lastrowid)
+            row = self.ctx.conn.execute(
+                "SELECT * FROM corpus_item WHERE id=?", (item_id,)).fetchone()
+            doc_rel = docs.store_uploaded_pdf(row, pdf, self.ctx.docs_dir)
+            self.ctx.conn.execute(
+                "UPDATE corpus_item SET doc_path=?, doc_fetched_at=? WHERE id=?",
+                (doc_rel, now, item_id))
+            self.ctx.conn.commit()
+        self._send_json({"ok": True, "id": item_id, "kind": "paper"})
 
     def _api_items_delete(self, item_id: int):
         """Delete a user-added item (paper or repo). Tracker items are protected.
@@ -938,6 +1002,42 @@ class Handler(BaseHTTPRequestHandler):
 import re as _re
 
 _MAX_MARKDOWN = 2 * 1024 * 1024  # 2 MB cap on attached markdown
+_MAX_PDF = 30 * 1024 * 1024  # 30 MB cap on an uploaded PDF
+
+
+def _parse_multipart_form(raw: bytes, ctype: str) -> dict:
+    """Parse a multipart/form-data body into its file part and text fields.
+
+    Minimal stdlib-only parse (sibling of ``_parse_multipart_file``): enough for
+    one binary file field plus simple text fields. Returns a dict with ``file``
+    (raw bytes of the first part carrying a ``filename`` — kept binary so a PDF
+    survives intact), ``filename`` (its declared name), and ``fields`` (a name →
+    decoded-text map for the non-file parts, e.g. an optional ``title``). Missing
+    pieces are ``None``/empty rather than an error.
+    """
+    out = {"file": None, "filename": None, "fields": {}}
+    m = _re.search(r'boundary="?([^";]+)"?', ctype)
+    if not m:
+        return out
+    delim = b"--" + m.group(1).encode()
+    for part in raw.split(delim):
+        if b"Content-Disposition" not in part:
+            continue
+        header_blob, sep, body = part.partition(b"\r\n\r\n")
+        if not sep:
+            continue
+        if body.endswith(b"\r\n"):
+            body = body[:-2]
+        header_text = header_blob.decode("latin-1", "replace")
+        file_m = _re.search(r'filename="([^"]*)"', header_text)
+        name_m = _re.search(r'name="([^"]*)"', header_text)
+        if file_m:
+            if out["file"] is None:  # first file part wins
+                out["file"] = body
+                out["filename"] = file_m.group(1)
+        elif name_m:
+            out["fields"][name_m.group(1)] = body.decode("utf-8", "replace")
+    return out
 
 
 def _parse_multipart_file(raw: bytes, ctype: str) -> Optional[bytes]:

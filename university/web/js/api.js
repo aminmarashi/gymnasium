@@ -42,6 +42,23 @@
       return request('GET', '/api/feed' + (q.length ? '?' + q.join('&') : ''));
     },
     addItem: function (payload) { return request('POST', '/api/items', payload); },
+    addItemFile: function (file, title) {
+      // Multipart upload of a PDF as an added paper. The browser sets the
+      // multipart Content-Type (with boundary) from the FormData body, so we
+      // must NOT set it ourselves.
+      var fd = new FormData();
+      fd.append('file', file, file.name);
+      if (title) fd.append('title', title);
+      return fetch('/api/items', {
+        method: 'POST', credentials: 'same-origin', body: fd
+      }).then(function (r) {
+        if (r.status === 401) { onUnauthorized(); throw new Error('unauthorized'); }
+        return r.json().then(function (data) {
+          if (!r.ok) { throw Object.assign(new Error(data.error || 'upload failed'), { data: data }); }
+          return data;
+        });
+      });
+    },
     deleteItem: function (id) { return request('DELETE', '/api/items/' + id); },
     facets: function (kind) {
       return request('GET', '/api/feed/facets?kind=' + encodeURIComponent(kind));
