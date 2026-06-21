@@ -50,6 +50,34 @@ def _paper_dir_slug(item: sqlite3.Row, raw: dict) -> str:
     return _safe_slug(str(ext), "paper")
 
 
+# arXiv ids appear as bare ids, in abs URLs, or inside a DataCite DOI.
+_ARXIV_ABS_RE = re.compile(r"arxiv\.org/abs/([^\s?#]+)", re.IGNORECASE)
+_ARXIV_DOI_RE = re.compile(r"10\.48550/arxiv\.([^\s?#/]+)", re.IGNORECASE)
+
+
+def _arxiv_pdf_url(item: sqlite3.Row, raw: dict) -> Optional[str]:
+    """Return the canonical arXiv PDF URL for an arXiv paper, else None.
+
+    Derives the arXiv id from an explicit ``arxiv_id``, an ``arxiv.org/abs/<id>``
+    URL (version suffix preserved), or a ``10.48550/arXiv.<id>`` DOI, and builds
+    ``https://arxiv.org/pdf/<id>``. Returns None when the item is not arXiv.
+    """
+    arxiv_id = (raw.get("arxiv_id") or "").strip()
+    if not arxiv_id:
+        sources = (raw.get("abs_url"), raw.get("source_url"), item["url"],
+                   raw.get("doi"), raw.get("url"))
+        for source in sources:
+            if not source:
+                continue
+            match = _ARXIV_ABS_RE.search(str(source)) or _ARXIV_DOI_RE.search(str(source))
+            if match:
+                arxiv_id = match.group(1).strip().rstrip("/")
+                break
+    if not arxiv_id:
+        return None
+    return "https://arxiv.org/pdf/{}".format(arxiv_id)
+
+
 def _repo_dir_slug(item: sqlite3.Row, raw: dict) -> str:
     owner = raw.get("owner") or ""
     name = raw.get("name") or ""
@@ -72,15 +100,23 @@ def _store_paper(item: sqlite3.Row, raw: dict, docs_dir: str) -> Optional[str]:
         fh.write(abstract)
 
     # original document: prefer the PDF, fall back to the abstract HTML page.
-    pdf_url = raw.get("pdf_url")
+    # For arXiv papers the tracker entry often lacks pdf_url, so derive the
+    # canonical arxiv.org/pdf/<id> URL and try it before the html fallback.
     html_url = raw.get("abs_url") or item["url"] or raw.get("source_url")
+    pdf_urls = []
+    if raw.get("pdf_url"):
+        pdf_urls.append(raw["pdf_url"])
+    arxiv_pdf = _arxiv_pdf_url(item, raw)
+    if arxiv_pdf and arxiv_pdf not in pdf_urls:
+        pdf_urls.append(arxiv_pdf)
     doc_rel = None
-    if pdf_url:
+    for pdf_url in pdf_urls:
         data = _fetch(pdf_url)
         if data:
             with open(os.path.join(abs_dir, "source.pdf"), "wb") as fh:
                 fh.write(data)
             doc_rel = os.path.join(rel_dir, "source.pdf")
+            break
     if doc_rel is None and html_url:
         data = _fetch(html_url)
         if data:
@@ -233,15 +269,24 @@ def ensure_document(item: sqlite3.Row, docs_dir: str, conn: sqlite3.Connection) 
 
     Returns the relative doc_path, or None if nothing could be stored.
     """
-    # Idempotent: if we already have a path AND the file exists, skip.
     existing = item["doc_path"]
-    if existing and os.path.isfile(os.path.join(docs_dir, existing)):
-        return existing
+    have_existing = bool(existing) and os.path.isfile(os.path.join(docs_dir, existing))
 
     try:
         raw = json.loads(item["raw_json"]) if item["raw_json"] else {}
     except (ValueError, TypeError):
         raw = {}
+
+    if have_existing:
+        # Idempotent, except: an abstract-only arXiv item may now be upgradable
+        # to the real PDF, so fall through and re-attempt the fetch in that case.
+        upgradable = (
+            os.path.basename(existing) == "abstract.txt"
+            and item["kind"] != "repo"
+            and _arxiv_pdf_url(item, raw) is not None
+        )
+        if not upgradable:
+            return existing
 
     try:
         if item["kind"] == "repo":
@@ -250,7 +295,7 @@ def ensure_document(item: sqlite3.Row, docs_dir: str, conn: sqlite3.Connection) 
             doc_rel = _store_paper(item, raw, docs_dir)
     except OSError as exc:
         print("[docs] store failed for item {}: {}".format(item["id"], exc))
-        return None
+        return existing if have_existing else None
 
     if doc_rel:
         conn.execute(
