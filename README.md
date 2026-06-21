@@ -66,6 +66,8 @@ prominence + scoring + report over everything. The default sources are:
 
 ### Install
 
+Requires Python 3.10+ (for markitdown markdown auto-conversion).
+
 ```bash
 pip install -e .            # add ".[dev]" for the test deps
 ```

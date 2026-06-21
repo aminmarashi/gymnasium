@@ -7,7 +7,7 @@ name = "labpapers"
 version = "0.1.0"
 description = "GenAI lab-paper tracker that ranks recent papers and researchers by author prominence (giant-weight)"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Gymnasium" }]
 dependencies = [
