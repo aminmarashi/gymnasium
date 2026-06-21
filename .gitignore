@@ -35,3 +35,5 @@ data/
 data/documents/
 downloads/
 papers/*.pdf
+
+reports/
