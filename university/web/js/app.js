@@ -102,10 +102,11 @@
   }
 
   // ---- nav -----------------------------------------------------------------
-  var SECTION = { papers: 'Papers', repos: 'Repos', added: 'Added', reader: 'Reader', saved: 'Knowledge base', map: 'Knowledge map' };
+  var SECTION = { papers: 'Papers', repos: 'Repos', added: 'Added', reader: 'Reader', saved: 'Knowledge base', concept: 'Knowledge base', map: 'Knowledge map' };
   function kindFor(screen) { return screen === 'repos' ? 'repo' : 'paper'; }
   function setNavActive() {
-    var screen = S.screen;
+    // The concept detail view lives under the Knowledge base tab.
+    var screen = S.screen === 'concept' ? 'saved' : S.screen;
     document.querySelectorAll('.rail-nav[data-screen]').forEach(function (b) {
       b.classList.toggle('on', b.dataset.screen === screen);
     });
@@ -471,8 +472,11 @@
       : '<span style="font:600 13px/1.3 var(--font-sans);color:var(--fg-muted)">From: ' + esc(srcName) + '</span>';
     var docLink = e.item_id
       ? '<a href="' + API.documentUrl(e.item_id) + '" target="_blank" rel="noopener" style="font:600 12px/1.3 var(--font-sans);margin-left:10px">document</a>' : '';
-    return '<article style="background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px;box-shadow:var(--shadow-1);padding:16px 18px;display:flex;flex-direction:column;gap:8px">' +
-      '<div style="display:flex;align-items:center;gap:10px"><h3 style="font:700 18px/1.3 var(--font-sans);color:var(--fg-1)">' + esc(e.term) + '</h3><span style="margin-left:auto;display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font:600 11px/1.4 var(--font-sans);background:var(--berry-100);color:var(--berry-600)">' + esc(e.tag || 'note') + '</span></div>' +
+    var removeBtn = '<button class="gym-press kb-remove" data-id="' + e.id + '" type="button" aria-label="Remove" title="Remove from knowledge base" style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;background:none;border-radius:8px;cursor:pointer;color:var(--fg-muted);flex:0 0 auto">' + ico(ICON.trash, 'style="width:17px;height:17px"') + '</button>';
+    // The whole card opens the concept detail view; inner buttons/links stop
+    // propagation so they keep their own behaviour.
+    return '<article class="kb-card" data-id="' + e.id + '" style="background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px;box-shadow:var(--shadow-1);padding:16px 18px;display:flex;flex-direction:column;gap:8px;cursor:pointer">' +
+      '<div style="display:flex;align-items:center;gap:10px"><h3 style="font:700 18px/1.3 var(--font-sans);color:var(--fg-1)">' + esc(e.term) + '</h3><span style="margin-left:auto;display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font:600 11px/1.4 var(--font-sans);background:var(--berry-100);color:var(--berry-600)">' + esc(e.tag || 'note') + '</span>' + removeBtn + '</div>' +
       '<p style="font:500 15px/1.6 var(--font-sans);color:var(--fg-2)">' + esc(def) + '</p>' +
       '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap">' + sourceBtn + docLink +
         '<span style="margin-left:auto;font:600 12px/1.3 var(--font-sans);color:var(--fg-muted)">First seen ' + esc(recency(e.created_at) || 'just now') + '</span>' +
@@ -495,6 +499,41 @@
         '<input class="gym-term-input" id="kbSearch" value="' + esc(S.kbQuery) + '" placeholder="Search terms, definitions, sources…" style="padding-left:40px;height:46px" />' +
       '</div>' + emptyBox +
       '<div style="display:flex;flex-direction:column;gap:12px">' + entries.map(kbCard).join('') + '</div>';
+  }
+
+  // A single concept's detail view: term + definition, a Remove button, and
+  // EVERY article that points to this concept (its back-references). Each
+  // article links into the reader.
+  function renderConcept() {
+    var e = S.conceptDetail;
+    if (!e) {
+      return '<button class="gym-press concept-back" style="display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px 0 8px;border:none;background:none;color:var(--fg-3);cursor:pointer;font:600 14px/1 var(--font-sans);margin-bottom:12px;border-radius:8px">' + ico(ICON.back, 'style="width:18px;height:18px"') + 'Knowledge base</button>' +
+        '<div style="display:flex;align-items:center;gap:8px;color:var(--fg-3);font:500 14px/1.5 var(--font-sans)">' + ico(ICON.refresh, 'class="ico spin" style="width:16px;height:16px"') + 'Loading…</div>';
+    }
+    var def = e.lead && e.body ? (e.lead + ' — ' + e.body) : (e.body || e.lead || '');
+    var analogyHTML = e.analogy
+      ? '<div style="background:var(--spark-100);border:1px solid var(--spark-200);border-radius:12px;padding:14px 16px;margin-top:6px;font:500 15px/1.6 var(--font-sans);color:var(--fg-1)"><span style="font:700 12px/1 var(--font-sans);color:var(--spark-700)">Picture it</span><br>' + esc(e.analogy) + '</div>'
+      : '';
+    var links = e.linked_items || [];
+    var linksHTML = links.length
+      ? links.map(function (it) {
+          var meta = it.source || (it.kind === 'repo' ? 'Repo' : 'Paper');
+          return '<button class="gym-press kb-article" data-id="' + it.id + '" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:12px;padding:14px 16px;cursor:pointer">' +
+            ico(it.kind === 'repo' ? ICON.link : ICON.bookmark, 'style="width:17px;height:17px;flex:0 0 auto;color:var(--fg-3)"') +
+            '<span style="display:flex;flex-direction:column;gap:2px;min-width:0"><span style="font:700 15px/1.3 var(--font-sans);color:var(--fg-1)">' + esc(it.title) + '</span><span style="font:600 12px/1.3 var(--font-sans);color:var(--fg-muted)">' + esc(meta) + '</span></span>' +
+            '<span style="margin-left:auto;flex:0 0 auto">' + ico(ICON.arrow, 'style="width:16px;height:16px;color:var(--fg-3)"') + '</span>' +
+          '</button>';
+        }).join('')
+      : '<div style="text-align:center;padding:32px 24px;background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px"><p style="font:500 14px/1.5 var(--font-sans);color:var(--fg-3)">No articles point to this concept yet.</p></div>';
+    var count = links.length;
+    return '<button class="gym-press concept-back" style="display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px 0 8px;border:none;background:none;color:var(--fg-3);cursor:pointer;font:600 14px/1 var(--font-sans);margin-bottom:12px;border-radius:8px">' + ico(ICON.back, 'style="width:18px;height:18px"') + 'Knowledge base</button>' +
+      '<div style="display:flex;align-items:flex-start;gap:12px">' +
+        '<h1 style="font:700 32px/1.1 var(--font-display);letter-spacing:-.02em;color:var(--fg-1);flex:1 1 auto;min-width:0">' + esc(e.term) + '</h1>' +
+        '<button class="gym-press concept-remove" data-id="' + e.id + '" type="button" style="display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border:1px solid var(--border-hair);background:var(--bg-surface);border-radius:999px;cursor:pointer;font:700 13px/1 var(--font-sans);color:var(--rose-600);flex:0 0 auto">' + ico(ICON.trash, 'style="width:16px;height:16px"') + 'Remove</button>' +
+      '</div>' +
+      '<p style="font:500 16px/1.6 var(--font-sans);color:var(--fg-2);margin-top:10px;max-width:64ch">' + esc(def) + '</p>' + analogyHTML +
+      '<h2 style="font:700 16px/1.2 var(--font-sans);color:var(--fg-1);margin:26px 0 12px">Seen in ' + count + ' article' + (count === 1 ? '' : 's') + '</h2>' +
+      '<div style="display:flex;flex-direction:column;gap:10px">' + linksHTML + '</div>';
   }
 
   // ====================================================================
@@ -705,6 +744,7 @@
     else if (S.screen === 'added') host.innerHTML = renderAdded();
     else if (S.screen === 'reader') { host.innerHTML = renderReader(); underlineConcepts($('readBody')); }
     else if (S.screen === 'saved') host.innerHTML = renderSaved();
+    else if (S.screen === 'concept') host.innerHTML = renderConcept();
     else if (S.screen === 'map') { host.innerHTML = renderMap(); wireMap(); }
     syncPanel();
   }
@@ -745,6 +785,9 @@
       };
     }
     if (seg === 'added') return { screen: 'added' };
+    if (seg === 'concept') {
+      return { screen: 'concept', id: parts[1] ? parseInt(parts[1], 10) : null };
+    }
     if (seg === 'saved') {
       return { screen: 'saved', q: sp.get('q') || '' };
     }
@@ -755,6 +798,7 @@
     opts = opts || {};
     if (screen === 'reader') return '#/read/' + opts.id;
     if (screen === 'added') return '#/added';
+    if (screen === 'concept') return '#/concept/' + opts.id;
     if (screen === 'saved') return '#/saved' + (opts.q ? '?q=' + encodeURIComponent(opts.q) : '');
     if (screen === 'map') return '#/map';
     // papers / repos: serialize this feed's q + sort + active filters.
@@ -791,6 +835,12 @@
       return;
     }
     if (r.screen === 'added') { S.readerReturn = '#/added'; go('added'); loadAdded(); return; }
+    if (r.screen === 'concept') {
+      if (r.id == null || isNaN(r.id)) { navigate('saved', null, true); return; }
+      S.readerReturn = location.hash || '#/concept/' + r.id;
+      openConcept(r.id);
+      return;
+    }
     if (r.screen === 'map') { go('map'); loadMap(); return; }
     // papers / repos: hydrate this feed's state from the hash, then query.
     var fs = S.feeds[r.kind];
@@ -951,6 +1001,13 @@
       }];
       S.savedEntryId = c.id; S.justSaved = true;  // already in the KB
       syncPanel();
+      // The currently-open article counts as a source for this concept. The
+      // server's explain reuse path records the back-reference with zero AI; we
+      // fire it in the background so the cached panel stays instant.
+      if (S.item) {
+        API.explain({ span_text: c.label, model: S.model, item_id: S.item.id })
+          .catch(function () {});
+      }
     } else {
       // Not in the local cache (e.g. just-loaded) — fall back to the explain
       // flow which still reuses the server-side cached definition with no
@@ -1131,6 +1188,30 @@
     }).catch(function () {});
   }
 
+  // -- concept detail (back-references) --
+  // Open a concept's detail view: term + definition + every article that points
+  // to it. Shows a loading state first, then the fetched entry (+linked_items).
+  function openConcept(id) {
+    S.conceptDetail = null;
+    go('concept');
+    return API.kbGet(id).then(function (e) {
+      if (S.screen !== 'concept') return;
+      S.conceptDetail = e;
+      render();
+    }).catch(function () { toast('Could not open concept'); navigate('saved'); });
+  }
+  // Remove a kb_entry (concept) and refresh the KB list / map cache. From the
+  // detail view we return to the list; from the list we re-query in place.
+  function removeKbEntry(id, fromDetail) {
+    return API.deleteKbEntry(id).then(function () {
+      toast('Removed from your knowledge base');
+      loadConcepts();            // refresh the reader's underline cache
+      if (S.mapData) loadMap();  // keep the knowledge map in sync
+      if (fromDetail) navigate('saved');
+      else if (S.screen === 'saved') runKbSearch(S.kbQuery, false);
+    }).catch(function () { toast('Could not remove'); });
+  }
+
   // -- map interactions --
   var linkMode = false, linkFirst = null, dragState = null;
   function loadMap() { API.map().then(function (d) { S.mapData = d; if (S.screen === 'map') render(); }); }
@@ -1286,7 +1367,31 @@
         openPanel(term.getAttribute('data-term'), 'explain'); return;
       }
       var kbOpen = e.target.closest('.kb-open');
-      if (kbOpen) { navigate('reader', { id: parseInt(kbOpen.getAttribute('data-item'), 10) }); return; }
+      if (kbOpen) { e.stopPropagation(); navigate('reader', { id: parseInt(kbOpen.getAttribute('data-item'), 10) }); return; }
+      var kbRemove = e.target.closest('.kb-remove');
+      if (kbRemove) {
+        e.stopPropagation();
+        var rmId = parseInt(kbRemove.getAttribute('data-id'), 10);
+        if (window.confirm('Remove this from your knowledge base?')) removeKbEntry(rmId, false);
+        return;
+      }
+      // Concept detail view: open a linked article, remove the concept, go back.
+      var kbArticle = e.target.closest('.kb-article');
+      if (kbArticle) { navigate('reader', { id: parseInt(kbArticle.getAttribute('data-id'), 10) }); return; }
+      var conceptRemove = e.target.closest('.concept-remove');
+      if (conceptRemove) {
+        var crId = parseInt(conceptRemove.getAttribute('data-id'), 10);
+        if (window.confirm('Remove this from your knowledge base?')) removeKbEntry(crId, true);
+        return;
+      }
+      if (e.target.closest('.concept-back')) { navigate('saved'); return; }
+      // Tapping a KB card (outside its inner buttons/links) opens the concept.
+      var kbCard = e.target.closest('.kb-card');
+      if (kbCard) {
+        if (e.target.closest('a')) return;  // let an inner document link work
+        navigate('concept', { id: parseInt(kbCard.getAttribute('data-id'), 10) });
+        return;
+      }
     });
     $('screen').addEventListener('input', function (e) {
       if (e.target.id === 'kbSearch') onKbSearch(e.target.value);

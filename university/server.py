@@ -21,7 +21,7 @@ from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
 
 from . import ai, auth, docs, feed, ingest, map_store, refresh, retrieval
-from .db import bootstrap, connect, reindex_entry, utcnow
+from .db import bootstrap, connect, link_source, reindex_entry, utcnow
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
@@ -239,6 +239,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._api_item_markdown_post(int(parts[2]))
             if len(parts) == 3 and parts[0] == "api" and parts[1] == "kb" and method == "GET":
                 return self._api_kb_get(int(parts[2]))
+            if len(parts) == 3 and parts[0] == "api" and parts[1] == "kb" and method == "DELETE":
+                return self._api_kb_delete(int(parts[2]))
             if len(parts) == 4 and parts[:3] == ["api", "map", "edge"] and method == "DELETE":
                 return self._api_map_edge_delete(int(parts[3]))
         except ValueError:
@@ -774,6 +776,11 @@ class Handler(BaseHTTPRequestHandler):
         norm = _normalize_label(span)
         with self.ctx.lock:
             direct = self._concept_by_label(norm)
+            if direct is not None:
+                # Reused from within an article: the open article is a source.
+                link_source(self.ctx.conn, int(direct["id"]),
+                            int(item_id) if item_id else None)
+                self.ctx.conn.commit()
         if direct is not None:
             return self._send_json({
                 "concepts": [self._concept_payload(direct, reused=True)],
@@ -795,6 +802,11 @@ class Handler(BaseHTTPRequestHandler):
             seen.add(nlabel)
             with self.ctx.lock:
                 existing = self._concept_by_label(nlabel)
+                if existing is not None:
+                    # Reused concept seen in this article: record the source.
+                    link_source(self.ctx.conn, int(existing["id"]),
+                                int(item_id) if item_id else None)
+                    self.ctx.conn.commit()
             if existing is not None:
                 out.append(self._concept_payload(existing, reused=True))
                 continue
@@ -943,6 +955,20 @@ class Handler(BaseHTTPRequestHandler):
             out = [self._entry_dict(r) for r in rows]
         self._send_json({"entries": out})
 
+    def _linked_items(self, entry_id: int) -> list:
+        """The corpus_items this concept (kb_entry) has been seen in.
+
+        Reads the back-reference table so a concept referenced by MANY articles
+        lists them all. Returns id/title/source/kind per article (caller holds
+        the lock).
+        """
+        rows = self.ctx.conn.execute(
+            "SELECT c.id, c.title, c.source, c.kind FROM kb_entry_source s "
+            "JOIN corpus_item c ON c.id = s.item_id WHERE s.kb_entry_id=? "
+            "ORDER BY s.id", (entry_id,)).fetchall()
+        return [{"id": r["id"], "title": r["title"], "source": r["source"],
+                 "kind": r["kind"]} for r in rows]
+
     def _api_kb_get(self, entry_id: int):
         with self.ctx.lock:
             row = self.ctx.conn.execute(
@@ -950,7 +976,44 @@ class Handler(BaseHTTPRequestHandler):
             if row is None:
                 return self._send_json({"error": "not found"}, status=404)
             out = self._entry_dict(row, with_messages=True)
+            out["linked_items"] = self._linked_items(entry_id)
         self._send_json(out)
+
+    def _api_kb_delete(self, entry_id: int):
+        """Remove a kb_entry and everything tied to it.
+
+        Deletes the entry's messages, its FTS index row, and (best-effort) its
+        knowledge-map node — the concept row plus any concept_edge referencing
+        it. The map cleanup is non-fatal: a failure there must not block removing
+        the entry itself. FK cascades cover kb_message / kb_entry_source / concept
+        too, but we delete explicitly so the FTS shadow and edges go regardless.
+        """
+        with self.ctx.lock:
+            row = self.ctx.conn.execute(
+                "SELECT id FROM kb_entry WHERE id=?", (entry_id,)).fetchone()
+            if row is None:
+                return self._send_json({"error": "not found"}, status=404)
+            # Best-effort knowledge-map cleanup: concept node + its edges.
+            try:
+                concepts = self.ctx.conn.execute(
+                    "SELECT id FROM concept WHERE kb_entry_id=?", (entry_id,)).fetchall()
+                for c in concepts:
+                    cid = int(c["id"])
+                    self.ctx.conn.execute(
+                        "DELETE FROM concept_edge WHERE src_concept_id=? OR dst_concept_id=?",
+                        (cid, cid))
+                self.ctx.conn.execute(
+                    "DELETE FROM concept WHERE kb_entry_id=?", (entry_id,))
+            except sqlite3.Error as exc:
+                print("[kb] map cleanup failed for entry {}: {}".format(entry_id, exc))
+            self.ctx.conn.execute(
+                "DELETE FROM kb_entry_source WHERE kb_entry_id=?", (entry_id,))
+            self.ctx.conn.execute(
+                "DELETE FROM kb_message WHERE kb_entry_id=?", (entry_id,))
+            self.ctx.conn.execute("DELETE FROM kb_fts WHERE entry_id=?", (entry_id,))
+            self.ctx.conn.execute("DELETE FROM kb_entry WHERE id=?", (entry_id,))
+            self.ctx.conn.commit()
+        self._send_json({"ok": True})
 
     def _api_kb_search(self, query: Dict):
         q = (query.get("q", [""])[0] or "").strip()
@@ -1040,6 +1103,8 @@ class Handler(BaseHTTPRequestHandler):
             reindex_entry(self.ctx.conn, entry_id)
             # A saved entry becomes a knowledge-map node.
             map_store.ensure_concept_for_entry(self.ctx.conn, entry_id)
+            # Record the originating article as a back-reference source.
+            link_source(self.ctx.conn, entry_id, int(item_id) if item_id else None)
             self.ctx.conn.commit()
             row = self.ctx.conn.execute(
                 "SELECT * FROM kb_entry WHERE id=?", (entry_id,)).fetchone()
@@ -1100,6 +1165,8 @@ class Handler(BaseHTTPRequestHandler):
                             {"lead": lead, "body": body, "analogy": analogy}), now))
                     reindex_entry(self.ctx.conn, eid)
                     map_store.ensure_concept_for_entry(self.ctx.conn, eid)
+                # Either way, link this concept to the current article (deduped).
+                link_source(self.ctx.conn, eid, int(item_id) if item_id else None)
                 row = self.ctx.conn.execute(
                     "SELECT * FROM kb_entry WHERE id=?", (eid,)).fetchone()
                 saved.append(self._entry_dict(row, with_messages=True))

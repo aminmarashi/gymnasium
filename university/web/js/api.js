@@ -94,6 +94,7 @@
     kbGet: function (id) { return request('GET', '/api/kb/' + id); },
     kbSearch: function (q) { return request('GET', '/api/kb/search?q=' + encodeURIComponent(q)); },
     kbSave: function (payload) { return request('POST', '/api/kb/save', payload); },
+    deleteKbEntry: function (id) { return request('DELETE', '/api/kb/' + id); },
     map: function () { return request('GET', '/api/map'); },
     mapEdgeAdd: function (src, dst) { return request('POST', '/api/map/edge', { src: src, dst: dst }); },
     mapEdgeDelete: function (id) { return request('DELETE', '/api/map/edge/' + id); },

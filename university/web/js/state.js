@@ -59,6 +59,7 @@
     // kb / map
     kbEntries: [],
     kbQuery: '',
+    conceptDetail: null,      // loaded kb_entry (+linked_items) for the detail view
     mapData: { nodes: [], edges: [] },
     // misc
     busy: false,

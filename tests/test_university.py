@@ -1485,3 +1485,179 @@ def test_chat_requires_item_and_message(live_server):
     # gated without a cookie
     status, _, _ = _http("POST", base + "/api/chat", {"item_id": 1, "message": "hi"})
     assert status == 401
+
+
+# --------------------------------------------------------------------------
+# kb entry deletion + linked-article back-references
+# --------------------------------------------------------------------------
+def _save_concept(conn, term, item_id=None):
+    """Insert a concept kb_entry (+ message + map node) like the save path does."""
+    cur = conn.execute(
+        "INSERT INTO kb_entry (term, span_text, item_id, mode, model, lead, body, "
+        "analogy, tag, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (term, term, item_id, "concept", "m", term + " lead", term + " body",
+         None, "concept", db.utcnow()))
+    eid = cur.lastrowid
+    conn.execute("INSERT INTO kb_message (kb_entry_id, role, content, created_at) "
+                 "VALUES (?,?,?,?)", (eid, "assistant", term + " body", db.utcnow()))
+    db.reindex_entry(conn, eid)
+    map_store.ensure_concept_for_entry(conn, eid)
+    db.link_source(conn, eid, item_id)
+    conn.commit()
+    return eid
+
+
+def test_bootstrap_backfills_kb_entry_source_from_item_id(conn):
+    """An existing concept with an item_id is backfilled into kb_entry_source."""
+    paper = _insert_paper(conn, "bf-1", {"arxiv_id": "bf-1"}, url="http://x")
+    # Insert directly WITHOUT touching link_source, simulating a pre-migration DB.
+    cur = conn.execute(
+        "INSERT INTO kb_entry (term, span_text, item_id, mode, tag, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        ("Legacy concept", "legacy", paper["id"], "concept", "concept", db.utcnow()))
+    eid = cur.lastrowid
+    conn.commit()
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM kb_entry_source WHERE kb_entry_id=?", (eid,)
+    ).fetchone()["c"] == 0
+    # Re-running bootstrap backfills the link from kb_entry.item_id.
+    db.bootstrap(conn)
+    row = conn.execute(
+        "SELECT item_id FROM kb_entry_source WHERE kb_entry_id=?", (eid,)).fetchone()
+    assert row["item_id"] == paper["id"]
+    # Idempotent: a second bootstrap does not duplicate the link.
+    db.bootstrap(conn)
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM kb_entry_source WHERE kb_entry_id=?", (eid,)
+    ).fetchone()["c"] == 1
+
+
+def test_link_source_dedupes(conn):
+    paper = _insert_paper(conn, "ls-1", {"arxiv_id": "ls-1"}, url="http://x")
+    eid = _save_concept(conn, "Routing", item_id=paper["id"])
+    # The save already linked it; linking the same pair again is a no-op.
+    db.link_source(conn, eid, paper["id"])
+    db.link_source(conn, eid, paper["id"])
+    conn.commit()
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM kb_entry_source WHERE kb_entry_id=? AND item_id=?",
+        (eid, paper["id"])).fetchone()["c"] == 1
+
+
+def test_kb_delete_removes_entry_messages_and_map(live_server, tmp_path):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+
+    # gated without a cookie
+    status, _, _ = _http("DELETE", base + "/api/kb/1")
+    assert status == 401
+
+    status, feed, _ = _http("GET", base + "/api/feed?kind=paper", cookie=cookie)
+    item_id = feed["items"][0]["id"]
+
+    # Save two concepts and link them on the map so an edge references one node.
+    status, s1, _ = _http("POST", base + "/api/kb/save", {
+        "concepts": [{"label": "Sparse routing", "lead": "L", "body": "B"}],
+        "item_id": item_id, "model": "openai/gpt-fake"}, cookie=cookie)
+    status, s2, _ = _http("POST", base + "/api/kb/save", {
+        "concepts": [{"label": "Load balancing", "lead": "L", "body": "B"}],
+        "item_id": item_id, "model": "openai/gpt-fake"}, cookie=cookie)
+    eid = s1["entries"][0]["id"]
+    status, mp, _ = _http("GET", base + "/api/map", cookie=cookie)
+    n1 = next(n for n in mp["nodes"] if n["kb_entry_id"] == eid)
+    n2 = next(n for n in mp["nodes"] if n["kb_entry_id"] == s2["entries"][0]["id"])
+    status, _, _ = _http("POST", base + "/api/map/edge",
+                         {"src": n1["id"], "dst": n2["id"]}, cookie=cookie)
+
+    # Confirm it is searchable and present before deletion.
+    status, found, _ = _http("GET", base + "/api/kb/search?q=sparse", cookie=cookie)
+    assert any(e["id"] == eid for e in found["entries"])
+
+    # DELETE removes the entry; 200.
+    status, out, _ = _http("DELETE", base + "/api/kb/{}".format(eid), cookie=cookie)
+    assert status == 200 and out["ok"] is True
+
+    # Gone from the KB list, from search, and from /api/kb/{id}.
+    status, kb, _ = _http("GET", base + "/api/kb", cookie=cookie)
+    assert eid not in [e["id"] for e in kb["entries"]]
+    status, found, _ = _http("GET", base + "/api/kb/search?q=sparse", cookie=cookie)
+    assert all(e["id"] != eid for e in found["entries"])
+    status, _, _ = _http("GET", base + "/api/kb/{}".format(eid), cookie=cookie)
+    assert status == 404
+
+    # The map node for that entry — and the edge that referenced it — are gone.
+    status, mp, _ = _http("GET", base + "/api/map", cookie=cookie)
+    assert all(n["kb_entry_id"] != eid for n in mp["nodes"])
+    node_ids = {n["id"] for n in mp["nodes"]}
+    assert all(e["src"] in node_ids and e["dst"] in node_ids for e in mp["edges"])
+    assert all(e["src"] != n1["id"] and e["dst"] != n1["id"] for e in mp["edges"])
+
+    # Its messages were removed too (verified directly on the shared DB).
+    c = db.connect(str(tmp_path / "g.db"))
+    msgs = c.execute(
+        "SELECT COUNT(*) c FROM kb_message WHERE kb_entry_id=?", (eid,)).fetchone()["c"]
+    c.close()
+    assert msgs == 0
+
+    # Deleting a now-missing id -> 404.
+    status, _, _ = _http("DELETE", base + "/api/kb/{}".format(eid), cookie=cookie)
+    assert status == 404
+
+
+def test_kb_save_and_explain_populate_links_with_dedupe(live_server):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+    status, feed, _ = _http("GET", base + "/api/feed?kind=paper", cookie=cookie)
+    item_id = feed["items"][0]["id"]
+
+    # Saving a concept from an article links that article as a source.
+    status, saved, _ = _http("POST", base + "/api/kb/save", {
+        "concepts": [{"label": "Token routing", "lead": "L", "body": "B"}],
+        "item_id": item_id, "model": "openai/gpt-fake",
+        "span_text": "Token routing"}, cookie=cookie)
+    eid = saved["entries"][0]["id"]
+    status, full, _ = _http("GET", base + "/api/kb/{}".format(eid), cookie=cookie)
+    assert [it["id"] for it in full["linked_items"]] == [item_id]
+
+    # Re-explaining the SAME concept within the SAME article dedupes the link.
+    status, _, _ = _http("POST", base + "/api/explain", {
+        "span_text": "token routing", "item_id": item_id,
+        "model": "openai/gpt-fake"}, cookie=cookie)
+    status, full, _ = _http("GET", base + "/api/kb/{}".format(eid), cookie=cookie)
+    assert [it["id"] for it in full["linked_items"]] == [item_id]
+
+
+def test_concept_seen_in_two_articles_lists_both(live_server):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+    status, feed, _ = _http("GET", base + "/api/feed?kind=paper", cookie=cookie)
+    paper_ids = [i["id"] for i in feed["items"] if i["kind"] == "paper"]
+    a, b = paper_ids[0], paper_ids[1]
+
+    # Save the concept from article A.
+    status, saved, _ = _http("POST", base + "/api/kb/save", {
+        "concepts": [{"label": "Expert routing", "lead": "L", "body": "B"}],
+        "item_id": a, "model": "openai/gpt-fake",
+        "span_text": "Expert routing"}, cookie=cookie)
+    eid = saved["entries"][0]["id"]
+
+    # Reuse it from article B (explain reuse path within a different article).
+    status, res, _ = _http("POST", base + "/api/explain", {
+        "span_text": "expert routing", "item_id": b,
+        "model": "openai/gpt-fake"}, cookie=cookie)
+    assert res["concepts"][0]["reused"] is True
+
+    # GET /api/kb/{id} lists BOTH articles as sources.
+    status, full, _ = _http("GET", base + "/api/kb/{}".format(eid), cookie=cookie)
+    linked = {it["id"] for it in full["linked_items"]}
+    assert linked == {a, b}
+    # Each linked item carries the fields the UI needs.
+    for it in full["linked_items"]:
+        assert it["title"] and it["kind"] in ("paper", "repo")
+        assert "source" in it

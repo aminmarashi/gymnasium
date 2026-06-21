@@ -107,6 +107,19 @@ CREATE TABLE IF NOT EXISTS kb_message (
     FOREIGN KEY (kb_entry_id) REFERENCES kb_entry(id) ON DELETE CASCADE
 );
 
+-- Back-references: every corpus_item a concept (kb_entry) has been seen in.
+-- A single concept can be linked by MANY articles, so this is a join table
+-- (one row per (entry, item) pair) deduped by the UNIQUE constraint.
+CREATE TABLE IF NOT EXISTS kb_entry_source (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    kb_entry_id     INTEGER NOT NULL,
+    item_id         INTEGER NOT NULL,
+    created_at      TEXT NOT NULL,
+    UNIQUE (kb_entry_id, item_id),
+    FOREIGN KEY (kb_entry_id) REFERENCES kb_entry(id) ON DELETE CASCADE,
+    FOREIGN KEY (item_id) REFERENCES corpus_item(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS concept (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     label           TEXT NOT NULL,
@@ -132,6 +145,8 @@ CREATE TABLE IF NOT EXISTS concept_edge (
 CREATE INDEX IF NOT EXISTS idx_corpus_kind ON corpus_item(kind);
 CREATE INDEX IF NOT EXISTS idx_kbmsg_entry ON kb_message(kb_entry_id);
 CREATE INDEX IF NOT EXISTS idx_concept_entry ON concept(kb_entry_id);
+CREATE INDEX IF NOT EXISTS idx_kbsource_entry ON kb_entry_source(kb_entry_id);
+CREATE INDEX IF NOT EXISTS idx_kbsource_item ON kb_entry_source(item_id);
 """
 
 # FTS5 over the saved-learning text. We index the entry's own fields plus the
@@ -180,6 +195,20 @@ def reindex_entry(conn: sqlite3.Connection, entry_id: int) -> None:
     )
 
 
+def link_source(conn: sqlite3.Connection, kb_entry_id: int, item_id: Optional[int]) -> None:
+    """Record that ``kb_entry_id`` (a concept) was seen in ``item_id``.
+
+    Deduped by the UNIQUE(kb_entry_id, item_id) constraint via INSERT OR IGNORE,
+    so calling it repeatedly for the same pair adds nothing. A falsy item_id is
+    a no-op (a concept with no originating article). The caller commits.
+    """
+    if not kb_entry_id or not item_id:
+        return
+    conn.execute(
+        "INSERT OR IGNORE INTO kb_entry_source (kb_entry_id, item_id, created_at) "
+        "VALUES (?,?,?)", (int(kb_entry_id), int(item_id), utcnow()))
+
+
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
     """Add ``column`` to ``table`` if an existing DB predates it. Idempotent.
 
@@ -205,4 +234,10 @@ def bootstrap(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "corpus_item", "markdown_path", "TEXT")
     _ensure_column(conn, "corpus_item", "markdown_source", "TEXT")
     _ensure_column(conn, "corpus_item", "added_by_user", "INTEGER DEFAULT 0")
+    # Backfill the back-reference table from each entry's originating item_id so
+    # existing concepts already list their origin article. Idempotent: the
+    # UNIQUE constraint + INSERT OR IGNORE means re-running adds nothing.
+    conn.execute(
+        "INSERT OR IGNORE INTO kb_entry_source (kb_entry_id, item_id, created_at) "
+        "SELECT id, item_id, created_at FROM kb_entry WHERE item_id IS NOT NULL")
     conn.commit()
