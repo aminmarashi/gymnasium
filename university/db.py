@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS corpus_item (
     ingested_at     TEXT NOT NULL,
     doc_path        TEXT,
     doc_fetched_at  TEXT,
+    markdown_path   TEXT,
+    markdown_source TEXT,                     -- 'user' | 'auto'
     raw_json        TEXT,
     UNIQUE (kind, external_id)
 );
@@ -177,6 +179,18 @@ def reindex_entry(conn: sqlite3.Connection, entry_id: int) -> None:
     )
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    """Add ``column`` to ``table`` if an existing DB predates it. Idempotent.
+
+    Existing installs already have a ``corpus_item`` table from before a column
+    was introduced; CREATE TABLE IF NOT EXISTS won't alter it, so we add the
+    column explicitly when ``PRAGMA table_info`` shows it absent.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info({})".format(table)).fetchall()}
+    if column not in cols:
+        conn.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, column, decl))
+
+
 def bootstrap(conn: sqlite3.Connection) -> None:
     """Create every table/index/FTS structure if missing. Idempotent."""
     if not _fts5_available(conn):
@@ -186,4 +200,7 @@ def bootstrap(conn: sqlite3.Connection) -> None:
         )
     conn.executescript(SCHEMA)
     conn.executescript(FTS_SCHEMA)
+    # Migrations for DBs created before a column existed.
+    _ensure_column(conn, "corpus_item", "markdown_path", "TEXT")
+    _ensure_column(conn, "corpus_item", "markdown_source", "TEXT")
     conn.commit()

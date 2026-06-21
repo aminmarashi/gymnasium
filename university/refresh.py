@@ -54,11 +54,22 @@ def _run_tracker(kind: str, days: int, reports_dir: str) -> None:
 
 
 def _worker(kind: str, days: int, reports_dir: str, conn_factory: Callable[[], object]) -> None:
-    try:
-        kinds = [kind] if kind in ("papers", "repos") else ["papers", "repos"]
-        for k in kinds:
-            _set(message="running {} tracker".format(k))
+    # Each tracker runs in isolation: a failing tracker (e.g. the repos
+    # tracker hitting a GitHub rate-limit or a missing GITHUB_TOKEN) must
+    # NOT abort the worker before ingest, or successfully-fetched sidecars
+    # from the other trackers would never reach corpus_item. Collect any
+    # per-tracker errors and always ingest whatever sidecars now exist.
+    kinds = [kind] if kind in ("papers", "repos") else ["papers", "repos"]
+    errors: Dict[str, str] = {}
+    for k in kinds:
+        _set(message="running {} tracker".format(k))
+        try:
             _run_tracker(k, days, reports_dir)
+        except Exception as exc:  # noqa: BLE001 — keep going, ingest the rest
+            errors[k] = "{}: {}".format(type(exc).__name__, exc)
+
+    err_note = ", ".join("{} failed: {}".format(k, m) for k, m in errors.items())
+    try:
         _set(message="ingesting reports")
         conn = conn_factory()
         try:
@@ -68,10 +79,17 @@ def _worker(kind: str, days: int, reports_dir: str, conn_factory: Callable[[], o
                 conn.close()
             except Exception:
                 pass
-        _set(status="done", finished_at=utcnow(), message="done", counts=counts)
-    except Exception as exc:  # noqa: BLE001 — must never crash the server
-        _set(status="error", finished_at=utcnow(),
-             message="{}: {}".format(type(exc).__name__, exc))
+        msg = "done" if not err_note else "done ({})".format(err_note)
+        _set(status="done", finished_at=utcnow(), message=msg, counts=counts)
+        print("[refresh] {} | counts={}{}".format(
+            msg, counts,
+            "" if not err_note else " | " + err_note))
+    except Exception as exc:  # noqa: BLE001 — ingest itself failed
+        msg = "{}: {}".format(type(exc).__name__, exc)
+        if err_note:
+            msg = "{} (also {})".format(msg, err_note)
+        _set(status="error", finished_at=utcnow(), message=msg)
+        print("[refresh] ingest failed | {}".format(msg))
 
 
 def run_refresh(kind: Optional[str], days: int, reports_dir: str,

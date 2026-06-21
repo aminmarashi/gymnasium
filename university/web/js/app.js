@@ -23,6 +23,7 @@
     bookmark: '<path d="M6 4h12v16l-6-4-6 4V4z"></path>',
     spark: '<path d="M12 3l1.7 5.1L19 10l-5.3 1.9L12 17l-1.7-5.1L5 10l5.3-1.9z"></path>',
     link: '<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"></path><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"></path>',
+    external: '<path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M19 14v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path>',
     search: '<circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4-4"></path>',
     close: '<path d="M6 6l12 12M18 6L6 18"></path>',
     send: '<path d="M5 12h13M13 6l6 6-6 6"></path>',
@@ -149,6 +150,20 @@
     out += esc(text.slice(last));
     return out;
   }
+  // Strip <script> tags and inline on*= handlers from rendered markdown so an
+  // attached file cannot self-XSS the authenticated origin (light safety).
+  function sanitizeHTML(html) {
+    return String(html)
+      .replace(/<script[\s\S]*?<\/script\s*>/gi, '')
+      .replace(/<script\b[^>]*>/gi, '')
+      .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
+      .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
+      .replace(/\son\w+\s*=\s*[^\s>]+/gi, '');
+  }
+  function renderMarkdownHTML(md) {
+    var html = window.snarkdown ? window.snarkdown(md) : esc(md);
+    return sanitizeHTML(html);
+  }
   function renderReader() {
     var it = S.item;
     if (!it) return '<p>Loading…</p>';
@@ -156,12 +171,24 @@
     var tags = (it.tags || []).map(function (t) {
       return '<span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font:600 11px/1.4 var(--font-sans);background:var(--paper-200);color:var(--fg-3)">' + esc(t) + '</span>';
     }).join('');
-    var bodyText = it.abstract || it.why || '';
-    var paras = bodyText.split(/\n{2,}|\.\s{2,}/).filter(function (p) { return p.trim(); });
-    if (!paras.length) paras = [bodyText];
-    var bodyHTML = paras.map(function (p) {
-      return '<p style="font:500 18px/1.75 var(--font-sans);color:var(--fg-1);margin:0 0 20px;max-width:64ch">' + paragraphHTML(p.trim()) + '</p>';
-    }).join('');
+    var bodyHTML;
+    if (it._markdownHTML != null) {
+      // Markdown (uploaded or auto-converted) becomes the reader body (no
+      // [[term]] re-marking). A small label shows where it came from.
+      var srcLabel = it._markdownSource === 'user'
+        ? 'Your uploaded markdown' : 'Auto-converted from the original';
+      var labelHTML = '<div style="display:inline-flex;align-items:center;gap:6px;font:600 12px/1.3 var(--font-sans);color:var(--fg-muted);margin-bottom:14px">' + esc(srcLabel) + '</div>';
+      bodyHTML = labelHTML + '<div class="gym-md" style="font:500 17px/1.7 var(--font-sans);color:var(--fg-1);max-width:64ch">' + it._markdownHTML + '</div>';
+    } else if (it._markdownLoading) {
+      bodyHTML = '<div style="display:flex;align-items:center;gap:8px;color:var(--fg-3);font:500 14px/1.5 var(--font-sans)">' + ico(ICON.refresh, 'class="ico spin" style="width:16px;height:16px"') + 'Converting the original to a readable view…</div>';
+    } else {
+      var bodyText = it.abstract || it.why || '';
+      var paras = bodyText.split(/\n{2,}|\.\s{2,}/).filter(function (p) { return p.trim(); });
+      if (!paras.length) paras = [bodyText];
+      bodyHTML = paras.map(function (p) {
+        return '<p style="font:500 18px/1.75 var(--font-sans);color:var(--fg-1);margin:0 0 20px;max-width:64ch">' + paragraphHTML(p.trim()) + '</p>';
+      }).join('');
+    }
 
     var summaryHTML;
     if (S.item._summary) {
@@ -173,6 +200,14 @@
     }
     var modelLabel = esc(S.item._summaryModel ? S.modelName(S.item._summaryModel) : S.modelName());
     var docLink = '<a href="' + API.documentUrl(it.id) + '" target="_blank" rel="noopener" style="font:600 13px/1.3 var(--font-sans)">Open the stored document</a>';
+    var origLink = it.url
+      ? '<a href="' + esc(it.url) + '" target="_blank" rel="noopener noreferrer" style="font:600 13px/1.3 var(--font-sans);color:var(--fg-link);margin-left:10px">' + ico(ICON.external, 'style="width:14px;height:14px;vertical-align:-2px;margin-right:3px"') + 'Open original</a>'
+      : '';
+    var attachLabel = it.has_markdown ? 'Replace markdown' : 'Attach markdown';
+    var attachControl = '<div style="margin-top:10px">' +
+      '<button class="gym-press" id="mdAttachBtn" style="display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--border-hair);background:var(--bg-surface);border-radius:999px;cursor:pointer;font:700 12px/1 var(--font-sans);color:var(--fg-2)">' + ico(ICON.plus, 'style="width:15px;height:15px"') + attachLabel + '</button>' +
+      '<input type="file" id="mdFile" accept=".md,.markdown,text/markdown" hidden>' +
+      '</div>';
 
     return '<div class="gym-read" id="readBody">' +
       '<button class="gym-press reader-back" data-screen="feed" style="display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px 0 8px;border:none;background:none;color:var(--fg-3);cursor:pointer;font:600 14px/1 var(--font-sans);margin-bottom:12px;border-radius:8px">' + ico(ICON.back, 'style="width:18px;height:18px"') + 'Feed</button>' +
@@ -180,7 +215,8 @@
         '<span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font:700 11px/1.4 var(--font-sans);background:var(--spark-100);color:var(--spark-700)">' + kindLabel + '</span>' + tags +
       '</div>' +
       '<h1 style="font:700 31px/1.18 var(--font-display);letter-spacing:-.02em;color:var(--fg-1)">' + esc(it.title) + '</h1>' +
-      '<p style="font:600 14px/1.5 var(--font-sans);color:var(--fg-3);margin-top:10px">' + esc(it.source || '') + ' · ' + docLink + '</p>' +
+      '<p style="font:600 14px/1.5 var(--font-sans);color:var(--fg-3);margin-top:10px">' + esc(it.source || '') + ' · ' + docLink + origLink + '</p>' +
+      attachControl +
       '<div style="background:var(--spark-100);border:1px solid var(--spark-200);border-radius:14px;padding:18px;margin:22px 0 26px">' +
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">' +
           ico(ICON.spark, 'style="fill:var(--spark-500);stroke:none;width:18px;height:18px"') +
@@ -363,7 +399,25 @@
       S.item = it;
       S.summaryTerms = it.summary_terms || [];
       if (it.summary_readable) { it._summary = it.summary_readable; }
+      // Try to load markdown when one exists OR an original could be converted.
+      // The first open may trigger a lazy auto-conversion server-side, so show
+      // a small loading state until it resolves (404 falls back to abstract).
+      if (it.has_markdown || it.markdown_available) { it._markdownLoading = true; }
       render();
+      if (it.has_markdown || it.markdown_available) {
+        API.markdown(id).then(function (md) {
+          if (S.item && S.item.id === id) {
+            S.item._markdownLoading = false;
+            if (md != null) {
+              S.item._markdownHTML = renderMarkdownHTML(md.text);
+              S.item._markdownSource = md.source;
+            }
+            render();
+          }
+        }).catch(function () {
+          if (S.item && S.item.id === id) { S.item._markdownLoading = false; render(); }
+        });
+      }
       if (!it.summary_readable) {
         API.summarize(id, S.model).then(function (res) {
           if (S.item && S.item.id === id) {
@@ -377,6 +431,23 @@
         it._summaryModel = S.model;
       }
     }).catch(function (e) { toast('Could not open item'); });
+  }
+
+  function attachMarkdown(file) {
+    if (!file || !S.item) return;
+    var id = S.item.id;
+    API.uploadMarkdown(id, file).then(function () {
+      toast('Markdown attached');
+      return API.markdown(id);
+    }).then(function (md) {
+      if (S.item && S.item.id === id && md != null) {
+        S.item.has_markdown = true;
+        S.item._markdownLoading = false;
+        S.item._markdownHTML = renderMarkdownHTML(md.text);
+        S.item._markdownSource = md.source;  // 'user' — upload overrides auto.
+        render();
+      }
+    }).catch(function () { toast('Could not attach markdown'); });
   }
 
   // -- selection toolbar --
@@ -603,6 +674,8 @@
       if (seg) { S.density = seg.dataset.d; render(); return; }
       var back = e.target.closest('.reader-back');
       if (back) { go('feed'); return; }
+      var mdBtn = e.target.closest('#mdAttachBtn');
+      if (mdBtn) { var inp = $('mdFile'); if (inp) inp.click(); return; }
       var term = e.target.closest('.gym-term');
       if (term) { openPanel(term.getAttribute('data-term'), 'explain'); return; }
       var kbOpen = e.target.closest('.kb-open');
@@ -610,6 +683,12 @@
     });
     $('screen').addEventListener('input', function (e) {
       if (e.target.id === 'kbSearch') onKbSearch(e.target.value);
+    });
+    $('screen').addEventListener('change', function (e) {
+      if (e.target.id === 'mdFile' && e.target.files && e.target.files[0]) {
+        attachMarkdown(e.target.files[0]);
+        e.target.value = '';
+      }
     });
 
     // Reader text selection.

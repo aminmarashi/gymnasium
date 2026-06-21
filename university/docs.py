@@ -123,6 +123,111 @@ def _store_repo(item: sqlite3.Row, raw: dict, docs_dir: str) -> Optional[str]:
     return os.path.join(rel_dir, "README.md")
 
 
+def _item_dir_rel(item: sqlite3.Row) -> str:
+    """Repo-relative document folder for an item (papers/<slug> | repos/<slug>).
+
+    Reuses the same slug logic as the document store so an attached markdown
+    file lands next to the item's other artifacts.
+    """
+    try:
+        raw = json.loads(item["raw_json"]) if item["raw_json"] else {}
+    except (ValueError, TypeError):
+        raw = {}
+    if item["kind"] == "repo":
+        return os.path.join("repos", _repo_dir_slug(item, raw))
+    return os.path.join("papers", _paper_dir_slug(item, raw))
+
+
+def save_markdown(item: sqlite3.Row, content: str, docs_dir: str) -> str:
+    """Write uploaded markdown as ``article.md`` in the item's doc folder.
+
+    Returns the repo-relative path. Overwrites any prior attachment (idempotent).
+    """
+    rel_dir = _item_dir_rel(item)
+    abs_dir = os.path.join(docs_dir, rel_dir)
+    os.makedirs(abs_dir, exist_ok=True)
+    with open(os.path.join(abs_dir, "article.md"), "w", encoding="utf-8") as fh:
+        fh.write(content)
+    return os.path.join(rel_dir, "article.md")
+
+
+def read_markdown(item: sqlite3.Row, docs_dir: str) -> Optional[str]:
+    """Return the stored markdown text for an item, or None when absent."""
+    rel = item["markdown_path"]
+    if not rel:
+        return None
+    abs_path = os.path.join(docs_dir, rel)
+    if not os.path.isfile(abs_path):
+        return None
+    with open(abs_path, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def auto_markdown(item: sqlite3.Row, docs_dir: str, conn: sqlite3.Connection) -> Optional[str]:
+    """Convert the item's stored original (PDF/HTML) to Markdown and cache it.
+
+    Ensures the original document is on disk (reusing ``ensure_document``), then
+    runs microsoft/markitdown over the stored ``source.pdf``/``source.html`` and
+    writes the result as ``article.auto.md`` next to the item's other artifacts.
+    Returns the converted text, or ``None`` when conversion is not possible
+    (markitdown missing, no source document, or any conversion error) so the
+    reader degrades gracefully to the abstract view.
+    """
+    doc_rel = ensure_document(item, docs_dir, conn)
+    if not doc_rel:
+        return None
+    # Only real source documents convert; the abstract.txt fallback is not one.
+    base = os.path.basename(doc_rel)
+    if base not in ("source.pdf", "source.html"):
+        return None
+    abs_src = os.path.join(docs_dir, doc_rel)
+    if not os.path.isfile(abs_src):
+        return None
+    try:
+        from markitdown import MarkItDown  # third-party; guarded import.
+
+        text = MarkItDown().convert(abs_src).text_content
+    except Exception as exc:  # ImportError or any conversion failure.
+        print("[docs] auto markdown failed for item {}: {}".format(item["id"], exc))
+        return None
+    if text is None:
+        return None
+    rel_dir = os.path.dirname(doc_rel)
+    abs_dir = os.path.join(docs_dir, rel_dir)
+    try:
+        os.makedirs(abs_dir, exist_ok=True)
+        with open(os.path.join(abs_dir, "article.auto.md"), "w", encoding="utf-8") as fh:
+            fh.write(text)
+    except OSError as exc:
+        print("[docs] auto markdown write failed for item {}: {}".format(item["id"], exc))
+        return None
+    return text
+
+
+def read_auto_markdown(item: sqlite3.Row, docs_dir: str) -> Optional[str]:
+    """Return the cached ``article.auto.md`` text for an item, or None when absent."""
+    rel_dir = _item_dir_rel(item)
+    abs_path = os.path.join(docs_dir, rel_dir, "article.auto.md")
+    if not os.path.isfile(abs_path):
+        return None
+    with open(abs_path, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def has_convertible_source(item: sqlite3.Row, docs_dir: str) -> bool:
+    """Cheap check: is a real source doc already on disk that could convert?
+
+    Does NOT fetch or convert — only inspects the stored ``doc_path``. Used by
+    the item endpoint to advertise a ``markdown_available`` flag without work.
+    """
+    doc_rel = item["doc_path"]
+    if not doc_rel:
+        return False
+    if os.path.basename(doc_rel) not in ("source.pdf", "source.html"):
+        return False
+    return os.path.isfile(os.path.join(docs_dir, doc_rel))
+
+
 def ensure_document(item: sqlite3.Row, docs_dir: str, conn: sqlite3.Connection) -> Optional[str]:
     """Ensure the original document is on disk; set doc_path. Idempotent.
 

@@ -39,6 +39,25 @@
     },
     item: function (id) { return request('GET', '/api/item/' + id); },
     documentUrl: function (id) { return '/api/item/' + id + '/document'; },
+    markdown: function (id) {
+      return fetch('/api/item/' + id + '/markdown', { credentials: 'same-origin' }).then(function (r) {
+        if (r.status === 401) { onUnauthorized(); throw new Error('unauthorized'); }
+        if (r.status === 404) return null;
+        if (!r.ok) throw new Error('request failed');
+        var source = r.headers.get('X-Markdown-Source') || null;
+        return r.text().then(function (text) { return { text: text, source: source }; });
+      });
+    },
+    uploadMarkdown: function (id, file) {
+      return fetch('/api/item/' + id + '/markdown', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'text/markdown' }, body: file
+      }).then(function (r) {
+        if (r.status === 401) { onUnauthorized(); throw new Error('unauthorized'); }
+        if (!r.ok) throw new Error('upload failed');
+        return r.json();
+      });
+    },
     summarize: function (itemId, model) { return request('POST', '/api/summarize', { item_id: itemId, model: model }); },
     ask: function (payload) { return request('POST', '/api/ask', payload); },
     kb: function () { return request('GET', '/api/kb'); },

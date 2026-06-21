@@ -158,7 +158,7 @@ trap cleanup INT TERM EXIT
 # Boot the app in the background, then wait until it answers locally
 # before wiring up the tunnel ingress.
 "${APP_CMD[@]}" --host 127.0.0.1 --port "$PORT" --db "$DB" \
-  --reports "$REPORTS" --docs-dir "$DOCS" \
+  --reports "$REPORTS" --docs-dir "$DOCS" --ingest-on-start \
   > "${LOG_DIR}/gymnasium.log" 2>&1 &
 APP_PID=$!
 

@@ -97,7 +97,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_bytes(self, data: bytes, content_type: str, status: int = 200,
-                    download_name: Optional[str] = None, attachment: bool = False):
+                    download_name: Optional[str] = None, attachment: bool = False,
+                    headers: Optional[Dict[str, str]] = None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
@@ -105,6 +106,9 @@ class Handler(BaseHTTPRequestHandler):
             disposition = "attachment" if attachment else "inline"
             self.send_header("Content-Disposition",
                              '{}; filename="{}"'.format(disposition, download_name))
+        if headers:
+            for k, v in headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
 
@@ -214,6 +218,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._api_item(int(parts[2]))
                 if len(parts) == 4 and parts[3] == "document" and method == "GET":
                     return self._api_item_document(int(parts[2]))
+                if len(parts) == 4 and parts[3] == "markdown" and method == "GET":
+                    return self._api_item_markdown_get(int(parts[2]))
+                if len(parts) == 4 and parts[3] == "markdown" and method == "POST":
+                    return self._api_item_markdown_post(int(parts[2]))
             if len(parts) == 3 and parts[0] == "api" and parts[1] == "kb" and method == "GET":
                 return self._api_kb_get(int(parts[2]))
             if len(parts) == 4 and parts[:3] == ["api", "map", "edge"] and method == "DELETE":
@@ -293,6 +301,8 @@ class Handler(BaseHTTPRequestHandler):
             "summary_readable": json.loads(row["summary_readable"]) if row["summary_readable"] else None,
             "summary_terms": json.loads(row["summary_terms"]) if row["summary_terms"] else None,
             "doc_path": row["doc_path"],
+            "has_markdown": bool(row["markdown_path"]),
+            "markdown_source": row["markdown_source"],
             "tags": [t for t in tag_list if t][:3],
         }
 
@@ -320,7 +330,13 @@ class Handler(BaseHTTPRequestHandler):
             docs.ensure_document(row, self.ctx.docs_dir, self.ctx.conn)
             row = self.ctx.conn.execute(
                 "SELECT * FROM corpus_item WHERE id=?", (item_id,)).fetchone()
-        self._send_json(self._item_dict(row))
+            out = self._item_dict(row)
+            # Cheap advertisement only: a user markdown exists, OR a real source
+            # document is on disk that could be converted on first read. No
+            # conversion runs here — that happens lazily in the markdown GET.
+            out["markdown_available"] = bool(row["markdown_path"]) or \
+                docs.has_convertible_source(row, self.ctx.docs_dir)
+        self._send_json(out)
 
     def _api_item_document(self, item_id: int):
         with self.ctx.lock:
@@ -352,6 +368,66 @@ class Handler(BaseHTTPRequestHandler):
         else:
             ctype = _CONTENT_TYPES.get(ext, "application/octet-stream")
             self._send_bytes(data, ctype, download_name=name)
+
+    # -- markdown attachment ------------------------------------------------
+    def _api_item_markdown_get(self, item_id: int):
+        with self.ctx.lock:
+            row = self.ctx.conn.execute(
+                "SELECT * FROM corpus_item WHERE id=?", (item_id,)).fetchone()
+            if row is None:
+                return self._send_json({"error": "not found"}, status=404)
+            # Precedence: a user upload always wins over the auto version.
+            content = docs.read_markdown(row, self.ctx.docs_dir)
+            source = "user" if content is not None else None
+            if content is None:
+                # Already-cached auto conversion, if any.
+                content = docs.read_auto_markdown(row, self.ctx.docs_dir)
+                if content is None:
+                    # Lazy first conversion: convert the stored original once.
+                    content = docs.auto_markdown(row, self.ctx.docs_dir, self.ctx.conn)
+                    if content is not None:
+                        self.ctx.conn.execute(
+                            "UPDATE corpus_item SET markdown_source=? WHERE id=?",
+                            ("auto", item_id))
+                        self.ctx.conn.commit()
+                if content is not None:
+                    source = "auto"
+        if content is None:
+            return self._send_json({"error": "no markdown"}, status=404)
+        self._send_bytes(content.encode("utf-8"), "text/markdown; charset=utf-8",
+                         headers={"X-Markdown-Source": source})
+
+    def _api_item_markdown_post(self, item_id: int):
+        with self.ctx.lock:
+            row = self.ctx.conn.execute(
+                "SELECT * FROM corpus_item WHERE id=?", (item_id,)).fetchone()
+        if row is None:
+            return self._send_json({"error": "not found"}, status=404)
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return self._send_json({"error": "empty body"}, status=400)
+        if length > _MAX_MARKDOWN:
+            return self._send_json({"error": "too large"}, status=413)
+        raw = self.rfile.read(length)
+        ctype = (self.headers.get("Content-Type") or "").lower()
+        if "multipart/form-data" in ctype:
+            data = _parse_multipart_file(raw, ctype)
+            if data is None:
+                return self._send_json({"error": "no file field"}, status=400)
+        else:
+            data = raw
+        try:
+            content = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return self._send_json({"error": "invalid encoding"}, status=400)
+        rel = docs.save_markdown(row, content, self.ctx.docs_dir)
+        with self.ctx.lock:
+            # An upload always overrides any auto version (source=user).
+            self.ctx.conn.execute(
+                "UPDATE corpus_item SET markdown_path=?, markdown_source=? WHERE id=?",
+                (rel, "user", item_id))
+            self.ctx.conn.commit()
+        self._send_json({"ok": True, "has_markdown": True})
 
     # -- summarize ----------------------------------------------------------
     def _api_summarize(self):
@@ -616,6 +692,34 @@ class Handler(BaseHTTPRequestHandler):
 # Helpers
 # --------------------------------------------------------------------------
 import re as _re
+
+_MAX_MARKDOWN = 2 * 1024 * 1024  # 2 MB cap on attached markdown
+
+
+def _parse_multipart_file(raw: bytes, ctype: str) -> Optional[bytes]:
+    """Extract the single uploaded file's bytes from a multipart/form-data body.
+
+    Minimal stdlib-only parse: enough for one file field. Returns None when no
+    form-data part is found.
+    """
+    m = _re.search(r'boundary="?([^";]+)"?', ctype)
+    if not m:
+        return None
+    delim = b"--" + m.group(1).encode()
+    fallback = None
+    for part in raw.split(delim):
+        if b"Content-Disposition" not in part:
+            continue
+        header_blob, sep, body = part.partition(b"\r\n\r\n")
+        if not sep:
+            continue
+        if body.endswith(b"\r\n"):
+            body = body[:-2]
+        if b"filename=" in header_blob:
+            return body  # prefer the actual file field
+        if fallback is None:
+            fallback = body
+    return fallback
 
 
 def _fts_tokens(q: str):
