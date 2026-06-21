@@ -388,6 +388,61 @@
     syncPanel();
   }
 
+  // ---- hash router ---------------------------------------------------------
+  // Hash-based so it works against the static file server with no backend
+  // change. Routes: #/ or #/feed, #/read/<id>, #/saved[?q=...], #/map.
+  function parseHash() {
+    var raw = location.hash || '';
+    if (raw.charAt(0) === '#') raw = raw.slice(1);
+    var query = '';
+    var qi = raw.indexOf('?');
+    if (qi !== -1) { query = raw.slice(qi + 1); raw = raw.slice(0, qi); }
+    var parts = raw.split('/').filter(Boolean);
+    var seg = parts[0] || '';
+    if (seg === 'read') {
+      return { screen: 'reader', id: parts[1] ? parseInt(parts[1], 10) : null };
+    }
+    if (seg === 'saved') {
+      var q = '';
+      try { q = new URLSearchParams(query).get('q') || ''; } catch (e) { q = ''; }
+      return { screen: 'saved', q: q };
+    }
+    if (seg === 'map') return { screen: 'map' };
+    return { screen: 'feed' };  // #/ , #/feed, or anything unrecognized
+  }
+  function buildHash(screen, opts) {
+    opts = opts || {};
+    if (screen === 'reader') return '#/read/' + opts.id;
+    if (screen === 'saved') return '#/saved' + (opts.q ? '?q=' + encodeURIComponent(opts.q) : '');
+    if (screen === 'map') return '#/map';
+    return '#/feed';
+  }
+  // Real in-app navigation: push a history entry (or replace it) and apply.
+  // Setting location.hash fires hashchange, which is where the route is
+  // actually applied — so Back/Forward and address-bar edits behave the same.
+  function navigate(screen, opts, replace) {
+    var h = buildHash(screen, opts);
+    if (replace) { history.replaceState(null, '', h); applyRoute(); return; }
+    if (location.hash === h) { applyRoute(); return; }  // hashchange won't fire
+    location.hash = h;
+  }
+  function applyRoute() {
+    var r = parseHash();
+    if (r.screen === 'reader') {
+      if (r.id == null || isNaN(r.id)) { navigate('feed', null, true); return; }
+      openReader(r.id);
+      return;
+    }
+    if (r.screen === 'saved') {
+      S.kbQuery = r.q || '';
+      go('saved');
+      runKbSearch(S.kbQuery, false);
+      return;
+    }
+    if (r.screen === 'map') { go('map'); loadMap(); return; }
+    go('feed');
+  }
+
   // ====================================================================
   // BEHAVIOUR
   // ====================================================================
@@ -532,13 +587,26 @@
 
   // -- knowledge base search (debounced) --
   var kbTimer = null;
+  // Fetch results for the current query and re-render the saved screen.
+  // inPlace keeps caret/focus in the search box (live typing); a full render
+  // is used when the route is applied (deep link / Back-Forward restore).
+  function runKbSearch(q, inPlace) {
+    var query = (q || '').trim();
+    var p = query ? API.kbSearch(query) : API.kb();
+    return p.then(function (res) {
+      S.kbEntries = res.entries || [];
+      if (!query) S.kbCount = S.kbEntries.length;
+      if (S.screen !== 'saved') return;
+      if (inPlace) renderInPlaceSaved(); else render();
+    });
+  }
   function onKbSearch(v) {
     S.kbQuery = v;
+    // Reflect the query in the URL as the user types, but replace the current
+    // history entry so typing does not spam Back/Forward.
+    history.replaceState(null, '', buildHash('saved', { q: v }));
     clearTimeout(kbTimer);
-    kbTimer = setTimeout(function () {
-      var p = v.trim() ? API.kbSearch(v.trim()) : API.kb();
-      p.then(function (res) { S.kbEntries = res.entries || []; renderInPlaceSaved(); });
-    }, 220);
+    kbTimer = setTimeout(function () { runKbSearch(v, true); }, 220);
   }
   function renderInPlaceSaved() {
     // Re-render saved screen but keep focus in the search box.
@@ -547,12 +615,6 @@
     $('screen').innerHTML = renderSaved();
     var ni = $('kbSearch');
     if (ni) { ni.focus(); if (pos != null) try { ni.setSelectionRange(pos, pos); } catch (e) {} }
-  }
-  function loadSaved() {
-    API.kb().then(function (res) {
-      S.kbEntries = res.entries || []; S.kbCount = res.entries.length;
-      if (S.screen === 'saved') render();
-    });
   }
   function loadGlossary() {
     API.kb().then(function (res) {
@@ -659,27 +721,30 @@
 
     document.querySelectorAll('[data-screen]').forEach(function (b) {
       if (b.dataset.screen === 'refresh-trigger') return;
-      b.addEventListener('click', function () { go(b.dataset.screen); });
+      b.addEventListener('click', function () { navigate(b.dataset.screen); });
     });
     $('railRefresh').addEventListener('click', triggerRefresh);
+
+    // Browser Back/Forward (and address-bar hash edits) re-apply the route.
+    window.addEventListener('hashchange', applyRoute);
 
     // Screen-level delegation.
     $('screen').addEventListener('click', function (e) {
       var card = e.target.closest('.feed-card, .feed-read');
       if (card) {
         var id = card.getAttribute('data-id');
-        if (id) { openReader(parseInt(id, 10)); return; }
+        if (id) { navigate('reader', { id: parseInt(id, 10) }); return; }
       }
       var seg = e.target.closest('.gym-seg[data-d]');
       if (seg) { S.density = seg.dataset.d; render(); return; }
       var back = e.target.closest('.reader-back');
-      if (back) { go('feed'); return; }
+      if (back) { navigate('feed'); return; }
       var mdBtn = e.target.closest('#mdAttachBtn');
       if (mdBtn) { var inp = $('mdFile'); if (inp) inp.click(); return; }
       var term = e.target.closest('.gym-term');
       if (term) { openPanel(term.getAttribute('data-term'), 'explain'); return; }
       var kbOpen = e.target.closest('.kb-open');
-      if (kbOpen) { openReader(parseInt(kbOpen.getAttribute('data-item'), 10)); return; }
+      if (kbOpen) { navigate('reader', { id: parseInt(kbOpen.getAttribute('data-item'), 10) }); return; }
     });
     $('screen').addEventListener('input', function (e) {
       if (e.target.id === 'kbSearch') onKbSearch(e.target.value);
@@ -715,7 +780,7 @@
       if (seg) { setMode(seg.dataset.mode); return; }
       if (e.target.closest('#panelSend')) { send(); return; }
       if (e.target.closest('#panelSave')) { saveEntry(); return; }
-      if (e.target.closest('.panel-gosaved')) { closePanel(); go('saved'); loadSaved(); return; }
+      if (e.target.closest('.panel-gosaved')) { closePanel(); navigate('saved'); return; }
     });
     $('panel').addEventListener('input', function (e) {
       if (e.target.id === 'panelDraft') S.draft = e.target.value;
@@ -726,9 +791,6 @@
 
     // Re-sync panel mode on viewport change.
     window.matchMedia('(min-width: 901px)').addListener(function () { if (S.panelOpen) syncPanel(); });
-
-    // Load screens lazily when navigated.
-    var origGo = go;
   }
 
   // -- refresh --
@@ -761,22 +823,14 @@
   function boot() {
     applyTheme();
     wireGlobal();
-    // route through go() so loaders fire
-    var _go = go;
-    go = function (screen) {
-      _go(screen);
-      if (screen === 'saved') loadSaved();
-      if (screen === 'map') loadMap();
-    };
-    // re-bind nav now that go is wrapped
-    document.querySelectorAll('[data-screen]').forEach(function (b) {
-      if (b.dataset.screen === 'refresh-trigger') return;
-    });
 
     API.me().then(function (me) {
       S.user = me;
       $('railUserName').textContent = me.username;
       $('railAvatar').textContent = (me.username || '?').charAt(0);
+      // Apply the current hash as a deep link once authenticated. A direct
+      // #/read/<id> visit fetches the item via openReader, so cold loads work.
+      applyRoute();
     }).catch(function () {});
 
     API.models().then(function (m) {
