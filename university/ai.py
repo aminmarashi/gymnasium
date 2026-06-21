@@ -324,6 +324,57 @@ def chat(item: dict, history: Optional[List[dict]], message: str,
     return {"lead": "In plain words", "body": text.strip()}
 
 
+def extract_concepts(span_text: str, item: Optional[dict], model: str) -> Dict[str, object]:
+    """Name the salient concept(s) in a selected span for the glossary.
+
+    Returns ``{"concepts": [label, ...], "question": str | None}``. The model is
+    asked for 1 to 3 normalized terms a learner would look up. When the
+    selection is too vague to name a clear concept it returns a single short
+    clarifying question instead (with ``concepts`` empty) so the caller can ask
+    the reader rather than guessing. Reuses the opencode ``generate`` path and
+    keeps the same calm, plain register as the other tasks.
+    """
+    title = item.get("title", "") if item else ""
+    context = (item.get("abstract") or item.get("why") or "") if item else ""
+    prompt = (
+        "Source: {title}\nContext: {context}\n\n"
+        "Selected text: \"{span}\"\n\n"
+        "Name the salient concept(s) or keyword(s) in the selected text as a "
+        "short list of 1 to 3 normalized terms — each a noun phrase a learner "
+        "would look up in a glossary (not a whole sentence). If the selection "
+        "is too vague to name a clear concept, do NOT guess: instead ask ONE "
+        "short clarifying question.\n"
+        "Return ONLY JSON. When clear: {{\"concepts\": [\"term\", ...], "
+        "\"question\": null}}. When unclear: {{\"concepts\": [], \"question\": "
+        "\"your question\"}}."
+    ).format(title=title, context=str(context)[:1500], span=str(span_text)[:1500])
+    text = generate(prompt, model, system=_PLAIN_REGISTER)
+    data = _extract_json(text)
+    concepts: List[str] = []
+    question: Optional[str] = None
+    if isinstance(data, dict):
+        raw = data.get("concepts")
+        if isinstance(raw, list):
+            for c in raw:
+                label = str(c).strip()
+                if label and label not in concepts:
+                    concepts.append(label)
+        q = data.get("question")
+        if q is not None and str(q).strip():
+            question = str(q).strip()
+    concepts = concepts[:3]
+    # Only surface the clarifying question when there is no clear concept.
+    if concepts:
+        question = None
+    elif not question:
+        # Defensive fallback: treat the trimmed span itself as the concept so
+        # the flow never dead-ends on a malformed reply.
+        fallback = re.sub(r"\s+", " ", str(span_text or "")).strip()
+        if fallback:
+            concepts = [fallback[:60]]
+    return {"concepts": concepts, "question": question}
+
+
 def suggest_links(concept: dict, others: List[dict], model: str) -> List[int]:
     """Return ids (from ``others``) the concept is most related to."""
     if not others:

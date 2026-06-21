@@ -494,6 +494,15 @@ def test_explain_modes():
     assert "analogy" not in s
 
 
+def test_extract_concepts_clear_and_vague():
+    out = ai.extract_concepts("Mixture of Experts", {"title": "T"}, "openai/gpt-fake")
+    assert out["concepts"] == ["Mixture of Experts"]
+    assert out["question"] is None
+    vague = ai.extract_concepts("this vague thing", {"title": "T"}, "openai/gpt-fake")
+    assert vague["concepts"] == []
+    assert vague["question"]
+
+
 def test_suggest_links():
     others = [{"id": 3, "label": "Router"}, {"id": 7, "label": "Tokens"}]
     out = ai.suggest_links({"id": 1, "label": "MoE"}, others, "openai/gpt-fake")
@@ -1349,6 +1358,121 @@ def test_article_chat_thread_and_grounding(live_server):
     # Chat entries do not clutter the concept map.
     status, mp, _ = _http("GET", base + "/api/map", cookie=cookie)
     assert all(n["kb_entry_id"] != entry_id for n in mp["nodes"])
+
+
+# --------------------------------------------------------------------------
+# concept-based glossary (Explain -> extract / reuse / define / clarify)
+# --------------------------------------------------------------------------
+def _count_generate(monkeypatch):
+    """Wrap ai.generate to count AI calls (the live server runs in-process)."""
+    calls = []
+    orig = ai.generate
+
+    def counting(*a, **k):
+        calls.append(1)
+        return orig(*a, **k)
+
+    monkeypatch.setattr(ai, "generate", counting)
+    return calls
+
+
+def test_explain_extracts_dedupes_and_reuses_without_ai(live_server, monkeypatch):
+    base = live_server
+    calls = _count_generate(monkeypatch)
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+    status, feed, _ = _http("GET", base + "/api/feed?kind=paper", cookie=cookie)
+    item_id = feed["items"][0]["id"]
+
+    # A fresh selection -> extraction names the concept and a definition is
+    # generated (>=2 AI calls), flagged NEW.
+    status, res, _ = _http("POST", base + "/api/explain", {
+        "span_text": "Token routing", "item_id": item_id,
+        "model": "openai/gpt-fake"}, cookie=cookie)
+    assert status == 200
+    assert res["question"] is None
+    assert len(res["concepts"]) == 1
+    concept = res["concepts"][0]
+    assert concept["label"] == "Token routing"
+    assert concept["reused"] is False
+    assert concept["body"]
+    assert len(calls) >= 2
+
+    # Saving it creates exactly one concept row.
+    status, saved, _ = _http("POST", base + "/api/kb/save", {
+        "concepts": [concept], "item_id": item_id, "model": "openai/gpt-fake",
+        "span_text": "Token routing"}, cookie=cookie)
+    assert status == 200 and len(saved["entries"]) == 1
+    eid = saved["entries"][0]["id"]
+    assert saved["entries"][0]["mode"] == "concept"
+
+    # Re-selecting the SAME concept reuses the cached definition with ZERO AI
+    # calls (the span normalizes straight to a known label).
+    before = len(calls)
+    status, res2, _ = _http("POST", base + "/api/explain", {
+        "span_text": "token routing", "item_id": item_id,
+        "model": "openai/gpt-fake"}, cookie=cookie)
+    assert status == 200
+    assert res2["concepts"][0]["reused"] is True
+    assert res2["concepts"][0]["kb_entry_id"] == eid
+    assert len(calls) == before  # no AI generation for a known concept
+
+    # Saving the re-encountered concept does NOT create a duplicate row.
+    status, saved2, _ = _http("POST", base + "/api/kb/save", {
+        "concepts": [res2["concepts"][0]], "item_id": item_id,
+        "model": "openai/gpt-fake"}, cookie=cookie)
+    assert saved2["entries"][0]["id"] == eid
+    status, conc, _ = _http("GET", base + "/api/kb/concepts", cookie=cookie)
+    labels = [c["label"] for c in conc["concepts"]]
+    assert labels.count("Token routing") == 1
+
+
+def test_explain_returns_clarifying_question_and_saves_nothing(live_server, monkeypatch):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+    status, feed, _ = _http("GET", base + "/api/feed?kind=paper", cookie=cookie)
+    item_id = feed["items"][0]["id"]
+
+    status, res, _ = _http("POST", base + "/api/explain", {
+        "span_text": "this vague thing", "item_id": item_id,
+        "model": "openai/gpt-fake"}, cookie=cookie)
+    assert status == 200
+    assert res["concepts"] == []
+    assert res["question"]
+    # Nothing was saved.
+    status, conc, _ = _http("GET", base + "/api/kb/concepts", cookie=cookie)
+    assert all("vague" not in c["label"].lower() for c in conc["concepts"])
+
+
+def test_kb_concepts_lists_labels_without_invoking_ai(live_server, monkeypatch):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+    status, feed, _ = _http("GET", base + "/api/feed?kind=paper", cookie=cookie)
+    item_id = feed["items"][0]["id"]
+
+    # Seed a concept directly via save (a fully-formed definition, no AI needed).
+    status, saved, _ = _http("POST", base + "/api/kb/save", {
+        "concepts": [{"label": "Backpropagation", "lead": "Gradient flow",
+                      "body": "How errors propagate back through a network.",
+                      "reused": False}],
+        "item_id": item_id, "model": "openai/gpt-fake"}, cookie=cookie)
+    assert status == 200
+
+    # Listing concepts must never call the AI.
+    def _boom(*a, **k):
+        raise AssertionError("AI must not be called to list concepts")
+
+    monkeypatch.setattr(ai, "generate", _boom)
+    status, conc, _ = _http("GET", base + "/api/kb/concepts", cookie=cookie)
+    assert status == 200
+    match = next(c for c in conc["concepts"] if c["label"] == "Backpropagation")
+    assert match["body"]
+    assert match["id"]
 
 
 def test_chat_requires_item_and_message(live_server):

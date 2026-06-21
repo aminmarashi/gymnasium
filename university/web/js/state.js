@@ -35,11 +35,14 @@
     item: null,               // current reader item (full dict)
     summaryTerms: [],         // terms to underline in the reader
     glossary: {},             // term(lower) -> kb entry id, for underlining
+    concepts: {},             // label(lower) -> {id,label,lead,body,analogy}
     // conversation
     panelOpen: false,
     selText: '',
     mode: 'explain',          // explain | summarize | ask
     answer: null,             // {lead, body, analogy?}
+    explainConcepts: null,    // [{label,lead,body,analogy,reused,kb_entry_id}]
+    clarifyQuestion: null,    // AI's clarifying question when the span is vague
     thread: [],               // [{role:'user'|'assistant', content}]
     savedEntryId: null,       // set once the entry is persisted
     justSaved: false,

@@ -54,6 +54,26 @@ def main():
                     except (ValueError, IndexError):
                         pass
             _emit(json.dumps(ids[:1]))
+        elif '"concepts"' in low and '"question"' in low:
+            # extract_concepts: pull the selected text back out of the prompt and
+            # derive a deterministic concept list. A selection containing the
+            # sentinel word "vague" (or an empty span) is treated as too unclear
+            # to name, so we return a clarifying question instead of guessing.
+            span = ""
+            marker = 'selected text: "'
+            if marker in low:
+                start = low.index(marker) + len(marker)
+                end = low.index('"', start)
+                if end != -1:
+                    span = prompt[start:end]
+            if "vague" in span.lower() or not span.strip():
+                payload = {
+                    "concepts": [],
+                    "question": "Which idea do you mean — can you name the specific term?",
+                }
+            else:
+                payload = {"concepts": [span.strip()], "question": None}
+            _emit(json.dumps(payload))
         elif "article_chat_mode" in low:
             # Article chat: echo the injected grounding back so a test can prove
             # the KB notes / concept map actually reached the model.

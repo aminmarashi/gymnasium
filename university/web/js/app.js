@@ -301,7 +301,6 @@
   // ====================================================================
   function termRegex() {
     var terms = (S.summaryTerms || []).slice();
-    Object.keys(S.glossary || {}).forEach(function (t) { terms.push(t); });
     terms = terms.filter(function (t) { return t && t.length >= 3; });
     if (!terms.length) return null;
     // longest-first so multi-word terms win.
@@ -322,6 +321,59 @@
     out += esc(text.slice(last));
     return out;
   }
+  // Underline every occurrence of a known KB concept label in the rendered
+  // reader body. Whole-word, case-insensitive, longest-match-first; text inside
+  // links/code and already-marked terms is skipped. Tapping a concept span
+  // shows its cached definition with zero AI (see openConceptPanel).
+  function conceptRegex() {
+    var labels = Object.keys(S.concepts || {})
+      .map(function (k) { return S.concepts[k].label; })
+      .filter(function (l) { return l && l.length >= 3; });
+    if (!labels.length) return null;
+    labels.sort(function (a, b) { return b.length - a.length; });
+    var escd = labels.map(function (t) { return t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
+    return new RegExp('\\b(' + escd.join('|') + ')\\b', 'gi');
+  }
+  function underlineConcepts(root) {
+    var re = conceptRegex();
+    if (!re || !root) return;
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (node) {
+        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        var p = node.parentNode;
+        while (p && p !== root) {
+          var tag = p.nodeName;
+          if (tag === 'A' || tag === 'CODE' || tag === 'PRE' || tag === 'SCRIPT' || tag === 'STYLE')
+            return NodeFilter.FILTER_REJECT;
+          if (p.classList && p.classList.contains('gym-term')) return NodeFilter.FILTER_REJECT;
+          p = p.parentNode;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    var targets = [], n;
+    while ((n = walker.nextNode())) targets.push(n);
+    targets.forEach(function (node) {
+      var text = node.nodeValue;
+      re.lastIndex = 0;
+      if (!re.test(text)) return;
+      re.lastIndex = 0;
+      var frag = document.createDocumentFragment(), last = 0, m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+        var span = document.createElement('span');
+        span.className = 'gym-term';
+        span.setAttribute('data-concept', m[0]);
+        span.textContent = m[0];
+        frag.appendChild(span);
+        last = m.index + m[0].length;
+        if (m.index === re.lastIndex) re.lastIndex++;
+      }
+      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    });
+  }
+
   // The ONE hardened markdown renderer lives in md.js (window.MD) so the article
   // body, attached markdown, repo README and chat all share the same
   // bracket-hardening (against snarkdown's runaway-link bug) and <script>/on*=
@@ -543,11 +595,25 @@
         '</div>' +
       '</div>';
   }
+  function analogyBlock(text) {
+    return '<div style="display:flex;gap:9px;align-items:flex-start;padding:11px 13px;border-radius:10px;background:var(--sky-100);font:500 14px/1.55 var(--font-sans);color:var(--fg-1)"><span style="font-weight:700;color:var(--sky-600);white-space:nowrap">Picture it</span><span>' + esc(text) + '</span></div>';
+  }
+  // One extracted concept: its label, a reused/new badge, and its definition.
+  function conceptCard(c) {
+    var badge = c.reused
+      ? '<span style="margin-left:auto;display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font:700 11px/1.4 var(--font-sans);background:var(--grass-100);color:var(--grass-600)">From your KB</span>'
+      : '<span style="margin-left:auto;display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font:700 11px/1.4 var(--font-sans);background:var(--spark-100);color:var(--spark-700)">New</span>';
+    return '<div class="concept-card" style="background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:10px">' +
+      '<div style="display:flex;align-items:center;gap:8px"><span class="concept-label" style="font:700 19px/1.3 var(--font-sans);color:var(--fg-1)">' + esc(c.label) + '</span>' + badge + '</div>' +
+      (c.lead ? '<div style="font:700 16px/1.35 var(--font-display);letter-spacing:-.01em;color:var(--fg-1)">' + esc(c.lead) + '</div>' : '') +
+      '<div class="gym-md" style="font:500 16px/1.7 var(--font-sans);color:var(--fg-2)">' + renderMarkdownHTML(c.body || '') + '</div>' +
+      (c.analogy ? analogyBlock(c.analogy) : '') +
+    '</div>';
+  }
   function renderPanel() {
     if (S.chatMode) return renderChatPanel();
     var a = S.answer || { lead: '', body: '', analogy: null };
-    var analogy = a.analogy
-      ? '<div style="display:flex;gap:9px;align-items:flex-start;padding:11px 13px;border-radius:10px;background:var(--sky-100);font:500 14px/1.55 var(--font-sans);color:var(--fg-1)"><span style="font-weight:700;color:var(--sky-600);white-space:nowrap">Picture it</span><span>' + esc(a.analogy) + '</span></div>' : '';
+    var analogy = a.analogy ? analogyBlock(a.analogy) : '';
     var thread = S.thread.map(function (m) {
       if (m.role === 'user') {
         return '<div style="align-self:flex-end;max-width:86%;background:var(--sky-500);color:#fff;padding:10px 14px;border-radius:14px 14px 4px 14px;font:500 15px/1.5 var(--font-sans)">' + esc(m.content) + '</div>';
@@ -557,8 +623,42 @@
     }).join('');
     var savedConfirm = S.justSaved
       ? '<div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-radius:10px;background:var(--grass-100);color:var(--grass-600);font:600 14px/1.4 var(--font-sans)">' + ico(ICON.check, 'style="width:17px;height:17px;stroke-width:2.6"') + 'Saved to your knowledge base.<button class="gym-press panel-gosaved" style="margin-left:auto;border:none;background:none;color:var(--fg-link);cursor:pointer;font:700 14px/1 var(--font-sans)">Open</button></div>' : '';
+    var explainMode = S.mode === 'explain';
+    var busyExplain = S.busy && !(S.explainConcepts && S.explainConcepts.length) && !S.clarifyQuestion;
+    var loadingExplain = busyExplain
+      ? '<div style="display:flex;align-items:center;gap:8px;color:var(--fg-3);font:500 14px/1.5 var(--font-sans)">' + ico(ICON.refresh, 'class="ico spin" style="width:16px;height:16px"') + 'Naming the concept…</div>' : '';
     var loading = S.busy && !S.answer
       ? '<div style="display:flex;align-items:center;gap:8px;color:var(--fg-3);font:500 14px/1.5 var(--font-sans)">' + ico(ICON.refresh, 'class="ico spin" style="width:16px;height:16px"') + 'Thinking…</div>' : '';
+    // Body: concept cards (Explain) or a single answer (Summarize).
+    var bodyBlock;
+    if (explainMode) {
+      if (loadingExplain) bodyBlock = loadingExplain;
+      else if (S.clarifyQuestion) {
+        bodyBlock = '<div style="background:var(--sun-100);border:1px solid var(--sun-200);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:8px">' +
+          '<div style="display:flex;align-items:center;gap:7px;font:700 13px/1 var(--font-sans);color:var(--ink-900)">' + ico(ICON.spark, 'style="fill:var(--sun-500);stroke:none;width:16px;height:16px"') + 'One quick question</div>' +
+          '<div style="font:500 16px/1.6 var(--font-sans);color:var(--fg-1)">' + esc(S.clarifyQuestion) + '</div>' +
+          '<div style="font:500 13px/1.5 var(--font-sans);color:var(--fg-muted)">Select a clearer phrase, or ask it as a follow-up below.</div>' +
+        '</div>';
+      } else if (S.explainConcepts && S.explainConcepts.length) {
+        bodyBlock = S.explainConcepts.map(conceptCard).join('');
+      } else {
+        bodyBlock = '<div style="color:var(--fg-3);font:500 14px/1.5 var(--font-sans)">No concept found in the selection.</div>';
+      }
+    } else {
+      bodyBlock = '<div style="background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:10px">' +
+        (loading || (
+          '<div style="font:700 19px/1.35 var(--font-display);letter-spacing:-.01em;color:var(--fg-1)">' + esc(a.lead) + '</div>' +
+          '<div class="gym-md" style="font:500 16px/1.7 var(--font-sans);color:var(--fg-2)">' + renderMarkdownHTML(a.body) + '</div>' + analogy)) +
+      '</div>';
+    }
+    // Save is available when there is something to save (concepts, or an answer).
+    var canSave = explainMode
+      ? !!(S.explainConcepts && S.explainConcepts.length && !S.clarifyQuestion)
+      : !!S.answer;
+    var saveLabel = S.justSaved ? 'Saved'
+      : explainMode
+        ? ((S.explainConcepts && S.explainConcepts.length > 1) ? 'Save concepts' : 'Save concept')
+        : 'Save to knowledge base';
     var menu = S.modelMenuOpen
       ? '<div style="position:absolute;right:0;top:40px;z-index:50;width:250px;max-height:340px;overflow:auto;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:12px;box-shadow:var(--shadow-3);padding:6px;display:flex;flex-direction:column;gap:2px" class="gym-scroll">' + modelMenuHTML() + '</div>' : '';
 
@@ -574,11 +674,7 @@
       '<div class="gym-scroll" style="flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:14px">' +
         '<div style="display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap"><span style="font:600 12px/1.7 var(--font-sans);color:var(--fg-muted)">From the text</span><span style="display:inline-block;padding:5px 11px;border-radius:9px;background:var(--sun-100);color:var(--ink-900);font:600 13px/1.4 var(--font-sans);max-width:100%">“' + esc(S.selText) + '”</span></div>' +
         '<div class="seg-row"><button class="gym-seg' + (S.mode === 'explain' ? ' on' : '') + '" data-mode="explain">Explain simply</button><button class="gym-seg' + (S.mode === 'summarize' ? ' on' : '') + '" data-mode="summarize">Summarize</button></div>' +
-        '<div style="background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:10px">' +
-          (loading || (
-            '<div style="font:700 19px/1.35 var(--font-display);letter-spacing:-.01em;color:var(--fg-1)">' + esc(a.lead) + '</div>' +
-            '<div class="gym-md" style="font:500 16px/1.7 var(--font-sans);color:var(--fg-2)">' + renderMarkdownHTML(a.body) + '</div>' + analogy)) +
-        '</div>' +
+        bodyBlock +
         thread + savedConfirm +
       '</div>' +
       '<div style="border-top:1px solid var(--border-hair);padding:12px 14px;display:flex;flex-direction:column;gap:10px;flex:0 0 auto">' +
@@ -586,7 +682,7 @@
           '<input class="gym-term-input" id="panelDraft" value="' + esc(S.draft) + '" placeholder="Ask a follow-up…" />' +
           '<button class="gym-press" id="panelSend" aria-label="Send" style="display:inline-flex;align-items:center;justify-content:center;width:46px;height:46px;flex:0 0 auto;border:none;background:var(--sky-500);color:#fff;border-radius:10px;cursor:pointer">' + ico(ICON.send, 'style="width:19px;height:19px;stroke-width:2.2"') + '</button>' +
         '</div>' +
-        '<button class="gym-press" id="panelSave" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;height:46px;border:none;background:var(--spark-500);color:#fff;border-radius:10px;cursor:pointer;font:700 15px/1 var(--font-sans)">' + ico(ICON.plus, 'style="width:18px;height:18px;stroke-width:2.2"') + (S.savedEntryId ? 'Saved' : 'Save to knowledge base') + '</button>' +
+        (canSave ? '<button class="gym-press" id="panelSave"' + (S.justSaved ? ' disabled' : '') + ' style="display:inline-flex;align-items:center;justify-content:center;gap:8px;height:46px;border:none;background:var(--spark-500);color:#fff;border-radius:10px;cursor:' + (S.justSaved ? 'default' : 'pointer') + ';font:700 15px/1 var(--font-sans)' + (S.justSaved ? ';opacity:.7' : '') + '">' + ico(S.justSaved ? ICON.check : ICON.plus, 'style="width:18px;height:18px;stroke-width:2.2"') + saveLabel + '</button>' : '') +
       '</div>';
   }
   function syncPanel() {
@@ -607,7 +703,7 @@
     var host = $('screen');
     if (S.screen === 'papers' || S.screen === 'repos') host.innerHTML = renderFeed(kindFor(S.screen));
     else if (S.screen === 'added') host.innerHTML = renderAdded();
-    else if (S.screen === 'reader') host.innerHTML = renderReader();
+    else if (S.screen === 'reader') { host.innerHTML = renderReader(); underlineConcepts($('readBody')); }
     else if (S.screen === 'saved') host.innerHTML = renderSaved();
     else if (S.screen === 'map') { host.innerHTML = renderMap(); wireMap(); }
     syncPanel();
@@ -828,14 +924,56 @@
     tb.hidden = false;
   }
 
-  function openPanel(span, mode) {
+  function resetPanel(span, mode) {
     S.panelOpen = true; S.chatMode = false; S.selText = span; S.mode = mode;
     S.answer = null; S.thread = []; S.draft = '';
-    S.savedEntryId = null; S.justSaved = false; S.busy = true; S.modelMenuOpen = false;
+    S.explainConcepts = null; S.clarifyQuestion = null;
+    S.savedEntryId = null; S.justSaved = false; S.modelMenuOpen = false;
     hideToolbar();
     try { window.getSelection().removeAllRanges(); } catch (e) {}
-    syncPanel();
-    askServer(mode, null);
+  }
+  function openPanel(span, mode) {
+    resetPanel(span, mode);
+    S.busy = true; syncPanel();
+    // Explain is concept-based: name the concept(s) and reuse/define each.
+    if (mode === 'explain') explainSelection(span);
+    else askServer(mode, null);
+  }
+  // Tapping an underlined concept shows its CACHED definition with zero AI.
+  function openConceptPanel(label) {
+    var c = S.concepts[(label || '').toLowerCase()];
+    resetPanel(label, 'explain');
+    if (c) {
+      S.busy = false;
+      S.explainConcepts = [{
+        label: c.label, lead: c.lead, body: c.body, analogy: c.analogy,
+        reused: true, kb_entry_id: c.id
+      }];
+      S.savedEntryId = c.id; S.justSaved = true;  // already in the KB
+      syncPanel();
+    } else {
+      // Not in the local cache (e.g. just-loaded) — fall back to the explain
+      // flow which still reuses the server-side cached definition with no
+      // generation when the label is known.
+      S.busy = true; syncPanel();
+      explainSelection(label);
+    }
+  }
+  function explainSelection(span) {
+    S.busy = true;
+    return API.explain({
+      span_text: span, model: S.model, item_id: S.item ? S.item.id : null
+    }).then(function (res) {
+      S.busy = false;
+      S.clarifyQuestion = res.question || null;
+      S.explainConcepts = res.concepts || [];
+      // A reused concept is already saved; reflect that on the Save button.
+      var reused = (S.explainConcepts || []).filter(function (c) { return c.reused; });
+      if (reused.length && reused.length === (S.explainConcepts || []).length) {
+        S.justSaved = true; S.savedEntryId = reused[0].kb_entry_id || null;
+      }
+      syncPanel();
+    }).catch(function () { S.busy = false; toast('AI request failed'); syncPanel(); });
   }
   // -- article chat (whole-article, knowledge-grounded) --
   function openChat() {
@@ -897,8 +1035,12 @@
     return parts.filter(Boolean).join('\n');
   }
   function setMode(mode) {
-    S.mode = mode; S.answer = null; S.busy = true; syncPanel();
-    askServer(mode, null);
+    S.mode = mode; S.answer = null;
+    S.explainConcepts = null; S.clarifyQuestion = null;
+    S.justSaved = false; S.savedEntryId = null;
+    S.busy = true; syncPanel();
+    if (mode === 'explain') explainSelection(S.selText);
+    else askServer(mode, null);
   }
   function send() {
     var q = (S.draft || '').trim(); if (!q) return;
@@ -910,6 +1052,28 @@
     hideToolbar(); syncPanel();
   }
   function saveEntry() {
+    // Concept-based Explain saves the extracted concept(s).
+    if (S.mode === 'explain') {
+      if (S.justSaved) return;
+      var toSave = (S.explainConcepts || []).filter(function (c) { return c.label; });
+      if (!toSave.length) return;
+      API.kbSave({
+        concepts: toSave, item_id: S.item ? S.item.id : null,
+        model: S.model, span_text: S.selText
+      }).then(function (res) {
+        S.justSaved = true;
+        var entries = res.entries || [];
+        if (entries.length) S.savedEntryId = entries[0].id;
+        S.explainConcepts = (S.explainConcepts || []).map(function (c) {
+          c.reused = true; return c;
+        });
+        toast('Saved to your knowledge base');
+        syncPanel();
+        loadConcepts();
+      }).catch(function () { toast('Save failed'); });
+      return;
+    }
+    // Summarize / ask keep the single-answer save path.
     if (!S.answer || S.savedEntryId) return;
     var payload = {
       span_text: S.selText, item_id: S.item ? S.item.id : null,
@@ -920,7 +1084,7 @@
       S.justSaved = true;
       toast('Saved to your knowledge base');
       syncPanel();
-      loadGlossary();
+      loadConcepts();
     }).catch(function () { toast('Save failed'); });
   }
 
@@ -955,11 +1119,16 @@
     var ni = $('kbSearch');
     if (ni) { ni.focus(); if (pos != null) try { ni.setSelectionRange(pos, pos); } catch (e) {} }
   }
-  function loadGlossary() {
-    API.kb().then(function (res) {
-      S.glossary = {};
-      (res.entries || []).forEach(function (e) { if (e.term) S.glossary[e.term.toLowerCase()] = e.id; });
-    });
+  // The reader underlines KB CONCEPTS (term + reusable definition) from cache.
+  // Concepts carry their cached definition so a tap shows it with zero AI.
+  function loadConcepts() {
+    return API.kbConcepts().then(function (res) {
+      S.concepts = {};
+      (res.concepts || []).forEach(function (c) {
+        if (c.label) S.concepts[c.label.toLowerCase()] = c;
+      });
+      if (S.screen === 'reader') render();
+    }).catch(function () {});
   }
 
   // -- map interactions --
@@ -1111,7 +1280,11 @@
       if (pdfBtn) { var pinp = $('addPdf'); if (pinp) pinp.click(); return; }
       if (e.target.closest('#chatArticleBtn')) { openChat(); return; }
       var term = e.target.closest('.gym-term');
-      if (term) { openPanel(term.getAttribute('data-term'), 'explain'); return; }
+      if (term) {
+        var concept = term.getAttribute('data-concept');
+        if (concept) { openConceptPanel(concept); return; }
+        openPanel(term.getAttribute('data-term'), 'explain'); return;
+      }
       var kbOpen = e.target.closest('.kb-open');
       if (kbOpen) { navigate('reader', { id: parseInt(kbOpen.getAttribute('data-item'), 10) }); return; }
     });
@@ -1228,7 +1401,7 @@
       S.model = m.default || (m.providers[0] && m.providers[0].models[0] && m.providers[0].models[0].id) || null;
     }).catch(function () {});
 
-    loadGlossary();
+    loadConcepts();
     render();
   }
 

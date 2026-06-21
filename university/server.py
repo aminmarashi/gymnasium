@@ -198,12 +198,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._api_summarize()
             if path == "/api/ask" and method == "POST":
                 return self._api_ask()
+            if path == "/api/explain" and method == "POST":
+                return self._api_explain()
             if path == "/api/chat" and method == "POST":
                 return self._api_chat()
             if path == "/api/chat" and method == "GET":
                 return self._api_chat_get(query)
             if path == "/api/kb" and method == "GET":
                 return self._api_kb_list()
+            if path == "/api/kb/concepts" and method == "GET":
+                return self._api_kb_concepts()
             if path == "/api/kb/search" and method == "GET":
                 return self._api_kb_search(query)
             if path == "/api/kb/save" and method == "POST":
@@ -723,6 +727,90 @@ class Handler(BaseHTTPRequestHandler):
                 self.ctx.conn.commit()
         self._send_json({"answer": answer, "model": model})
 
+    # -- explain (concept-based glossary) -----------------------------------
+    def _concept_by_label(self, norm_label: str) -> Optional[sqlite3.Row]:
+        """Find a saved CONCEPT entry by its normalized label (caller holds lock)."""
+        if not norm_label:
+            return None
+        return self.ctx.conn.execute(
+            "SELECT * FROM kb_entry WHERE mode='concept' "
+            "AND LOWER(TRIM(term))=? ORDER BY id LIMIT 1", (norm_label,)).fetchone()
+
+    @staticmethod
+    def _concept_payload(row: sqlite3.Row, reused: bool) -> dict:
+        return {
+            "label": row["term"],
+            "lead": row["lead"] or "",
+            "body": row["body"] or "",
+            "analogy": row["analogy"],
+            "reused": reused,
+            "kb_entry_id": int(row["id"]),
+        }
+
+    def _api_explain(self):
+        """Concept-based Explain: name the concept(s) in a span, reuse or define.
+
+        For each salient concept in the selection we look it up in the KB by
+        normalized label. Known concepts REUSE their cached definition with no
+        AI call; new ones get a concise definition generated. When the selection
+        is too vague to name a concept the AI returns a clarifying question and
+        we surface that instead of guessing.
+        """
+        data = self._read_json()
+        span = (data.get("span_text") or "").strip()
+        model = data.get("model") or self.ctx.default_model
+        item_id = data.get("item_id")
+
+        item = {}
+        if item_id:
+            with self.ctx.lock:
+                row = self.ctx.conn.execute(
+                    "SELECT * FROM corpus_item WHERE id=?", (int(item_id),)).fetchone()
+            if row is not None:
+                item = self._item_dict(row)
+
+        # Optimization: if the selection itself normalizes to a known concept
+        # label, skip the extraction AI call entirely and return the cache.
+        norm = _normalize_label(span)
+        with self.ctx.lock:
+            direct = self._concept_by_label(norm)
+        if direct is not None:
+            return self._send_json({
+                "concepts": [self._concept_payload(direct, reused=True)],
+                "question": None, "model": model})
+
+        extraction = ai.extract_concepts(span, item, model)
+        question = extraction.get("question")
+        labels = extraction.get("concepts") or []
+        if question and not labels:
+            return self._send_json(
+                {"concepts": [], "question": question, "model": model})
+
+        out = []
+        seen = set()
+        for label in labels:
+            nlabel = _normalize_label(label)
+            if not nlabel or nlabel in seen:
+                continue
+            seen.add(nlabel)
+            with self.ctx.lock:
+                existing = self._concept_by_label(nlabel)
+            if existing is not None:
+                out.append(self._concept_payload(existing, reused=True))
+                continue
+            # New concept -> generate a concise definition (not yet persisted;
+            # persistence happens on Save so vague/abandoned explains add nothing).
+            definition = ai.explain(label, "explain", item, model)
+            out.append({
+                "label": label,
+                "lead": definition.get("lead", ""),
+                "body": definition.get("body", ""),
+                "analogy": definition.get("analogy"),
+                "reused": False,
+                "kb_entry_id": None,
+            })
+        self._send_json({"concepts": out, "question": None, "model": model})
+
     @staticmethod
     def _answer_text(answer: dict) -> str:
         parts = [answer.get("lead", ""), answer.get("body", "")]
@@ -883,8 +971,31 @@ class Handler(BaseHTTPRequestHandler):
             out = [self._entry_dict(r) for r in rows]
         self._send_json({"entries": out})
 
+    def _item_source(self, irow: Optional[sqlite3.Row]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Snapshot (source_url, source_doc_path, tag) for a corpus item row.
+
+        Ensures the source document is on disk and derives a tag from the item's
+        raw metadata. Returns (None, None, None) when there is no item.
+        """
+        if irow is None:
+            return None, None, None
+        source_url = irow["url"]
+        source_doc_path = docs.ensure_document(irow, self.ctx.docs_dir, self.ctx.conn)
+        try:
+            raw = json.loads(irow["raw_json"]) if irow["raw_json"] else {}
+        except (ValueError, TypeError):
+            raw = {}
+        tag = (raw.get("labs_matched") or raw.get("topics") or [None])[0]
+        if not tag and raw.get("primary_field"):
+            tag = raw["primary_field"]
+        return source_url, source_doc_path, tag
+
     def _api_kb_save(self):
         data = self._read_json()
+        # Concept-based save (the glossary path): dedupe by normalized label.
+        if data.get("concepts") is not None:
+            return self._api_kb_save_concepts(data)
+
         span = data.get("span_text", "")
         item_id = data.get("item_id")
         mode = data.get("mode", "explain")
@@ -896,26 +1007,13 @@ class Handler(BaseHTTPRequestHandler):
         lead = answer.get("lead", "")
         body = answer.get("body", "")
         analogy = answer.get("analogy")
-        source_url = None
-        source_doc_path = None
-        tag = None
 
         with self.ctx.lock:
             irow = None
             if item_id:
                 irow = self.ctx.conn.execute(
                     "SELECT * FROM corpus_item WHERE id=?", (int(item_id),)).fetchone()
-            if irow is not None:
-                source_url = irow["url"]
-                # Ensure the source document is on disk and snapshot its path.
-                source_doc_path = docs.ensure_document(irow, self.ctx.docs_dir, self.ctx.conn)
-                try:
-                    raw = json.loads(irow["raw_json"]) if irow["raw_json"] else {}
-                except (ValueError, TypeError):
-                    raw = {}
-                tag = (raw.get("labs_matched") or raw.get("topics") or [None])[0]
-                if not tag and raw.get("primary_field"):
-                    tag = raw["primary_field"]
+            source_url, source_doc_path, tag = self._item_source(irow)
             now = utcnow()
             cur = self.ctx.conn.execute(
                 "INSERT INTO kb_entry (term, span_text, item_id, source_url, "
@@ -947,6 +1045,85 @@ class Handler(BaseHTTPRequestHandler):
                 "SELECT * FROM kb_entry WHERE id=?", (entry_id,)).fetchone()
             out = self._entry_dict(row, with_messages=True)
         self._send_json({"ok": True, "entry": out})
+
+    def _api_kb_save_concepts(self, data: dict):
+        """Persist extracted CONCEPT(s), deduped by normalized label.
+
+        A concept entry is term=label, lead/body=definition, mode='concept'.
+        Re-saving a concept already in the KB reuses the existing row (and
+        attaches it to this article if it had no source yet) instead of creating
+        a duplicate, so the same concept is never stored twice.
+        """
+        concepts = data.get("concepts") or []
+        item_id = data.get("item_id")
+        model = data.get("model")
+        span = data.get("span_text") or ""
+
+        with self.ctx.lock:
+            irow = None
+            if item_id:
+                irow = self.ctx.conn.execute(
+                    "SELECT * FROM corpus_item WHERE id=?", (int(item_id),)).fetchone()
+            source_url, source_doc_path, tag = self._item_source(irow)
+            now = utcnow()
+            saved = []
+            for c in concepts:
+                label = (str(c.get("label") or "")).strip()
+                if not label:
+                    continue
+                nlabel = _normalize_label(label)
+                lead = c.get("lead", "") or ""
+                body = c.get("body", "") or ""
+                analogy = c.get("analogy")
+                existing = self._concept_by_label(nlabel)
+                if existing is not None:
+                    eid = int(existing["id"])
+                    # Backfill a source if the cached concept had none yet.
+                    if irow is not None and not existing["item_id"]:
+                        self.ctx.conn.execute(
+                            "UPDATE kb_entry SET item_id=?, source_url=?, "
+                            "source_doc_path=? WHERE id=?",
+                            (int(item_id), source_url, source_doc_path, eid))
+                else:
+                    cur = self.ctx.conn.execute(
+                        "INSERT INTO kb_entry (term, span_text, item_id, source_url, "
+                        "source_doc_path, mode, model, lead, body, analogy, tag, "
+                        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (label, span or label, int(item_id) if item_id else None,
+                         source_url, source_doc_path, "concept", model, lead, body,
+                         analogy, tag or "concept", now))
+                    eid = int(cur.lastrowid)
+                    self.ctx.conn.execute(
+                        "INSERT INTO kb_message (kb_entry_id, role, content, created_at) "
+                        "VALUES (?,?,?,?)",
+                        (eid, "assistant", self._answer_text(
+                            {"lead": lead, "body": body, "analogy": analogy}), now))
+                    reindex_entry(self.ctx.conn, eid)
+                    map_store.ensure_concept_for_entry(self.ctx.conn, eid)
+                row = self.ctx.conn.execute(
+                    "SELECT * FROM kb_entry WHERE id=?", (eid,)).fetchone()
+                saved.append(self._entry_dict(row, with_messages=True))
+            self.ctx.conn.commit()
+        self._send_json({"ok": True, "entries": saved})
+
+    def _api_kb_concepts(self):
+        """List known concept labels (+id and cached definition). No AI call.
+
+        The reader uses this to underline concepts and to show a concept's cached
+        definition with zero AI when one is tapped.
+        """
+        with self.ctx.lock:
+            rows = self.ctx.conn.execute(
+                "SELECT id, term, lead, body, analogy FROM kb_entry "
+                "WHERE mode='concept' ORDER BY LENGTH(term) DESC, id DESC").fetchall()
+            out = [{
+                "id": int(r["id"]),
+                "label": r["term"],
+                "lead": r["lead"] or "",
+                "body": r["body"] or "",
+                "analogy": r["analogy"],
+            } for r in rows]
+        self._send_json({"concepts": out})
 
     # -- map ----------------------------------------------------------------
     def _api_map(self):
@@ -1129,6 +1306,11 @@ def _page_title(url: str) -> Optional[str]:
 
 def _fts_tokens(q: str):
     return [t for t in _re.findall(r"[A-Za-z0-9]+", q.lower()) if t]
+
+
+def _normalize_label(label: str) -> str:
+    """Normalize a concept label for case-insensitive, trimmed dedupe lookups."""
+    return _re.sub(r"\s+", " ", label or "").strip().lower()
 
 
 def _term_from_span(span: str) -> str:
