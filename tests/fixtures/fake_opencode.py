@@ -54,6 +54,19 @@ def main():
                     except (ValueError, IndexError):
                         pass
             _emit(json.dumps(ids[:1]))
+        elif "article_chat_mode" in low:
+            # Article chat: echo the injected grounding back so a test can prove
+            # the KB notes / concept map actually reached the model.
+            ground = ""
+            if "begin_grounding" in low and "end_grounding" in low:
+                start = low.index("begin_grounding") + len("begin_grounding")
+                end = low.index("end_grounding")
+                ground = prompt[start:end].strip()
+            payload = {
+                "lead": "About this article",
+                "body": "Drawing on your notes. " + ground,
+            }
+            _emit(json.dumps(payload))
         else:
             # explain / summarize / ask
             payload = {

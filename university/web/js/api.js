@@ -66,6 +66,8 @@
     },
     summarize: function (itemId, model) { return request('POST', '/api/summarize', { item_id: itemId, model: model }); },
     ask: function (payload) { return request('POST', '/api/ask', payload); },
+    chat: function (payload) { return request('POST', '/api/chat', payload); },
+    chatThread: function (itemId) { return request('GET', '/api/chat?item_id=' + encodeURIComponent(itemId)); },
     kb: function () { return request('GET', '/api/kb'); },
     kbGet: function (id) { return request('GET', '/api/kb/' + id); },
     kbSearch: function (q) { return request('GET', '/api/kb/search?q=' + encodeURIComponent(q)); },

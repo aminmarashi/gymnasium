@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
 
-from . import ai, auth, docs, feed, ingest, map_store, refresh
+from . import ai, auth, docs, feed, ingest, map_store, refresh, retrieval
 from .db import bootstrap, connect, reindex_entry, utcnow
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
@@ -193,6 +193,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._api_summarize()
             if path == "/api/ask" and method == "POST":
                 return self._api_ask()
+            if path == "/api/chat" and method == "POST":
+                return self._api_chat()
+            if path == "/api/chat" and method == "GET":
+                return self._api_chat_get(query)
             if path == "/api/kb" and method == "GET":
                 return self._api_kb_list()
             if path == "/api/kb/search" and method == "GET":
@@ -509,7 +513,17 @@ class Handler(BaseHTTPRequestHandler):
 
         # When it's a follow-up question, the question itself is the prompt.
         ask_span = message if (mode == "ask" and message) else span
-        answer = ai.explain(ask_span, mode, item, model, history=history)
+        # Ground the answer in the reader's own KB notes / concept map. The
+        # query is whatever the reader is asking about (the question or span).
+        kb_notes = None
+        graph = None
+        if item:
+            with self.ctx.lock:
+                bundle = retrieval.retrieve_context(self.ctx.conn, item, ask_span)
+            kb_notes = bundle["notes"]
+            graph = {"concepts": bundle["concepts"], "edges": bundle["edges"]}
+        answer = ai.explain(ask_span, mode, item, model, history=history,
+                            kb_notes=kb_notes, graph=graph)
 
         # If tied to a saved entry, append the user turn + answer.
         if kb_entry_id:
@@ -533,6 +547,92 @@ class Handler(BaseHTTPRequestHandler):
         if answer.get("analogy"):
             parts.append("Picture it: " + answer["analogy"])
         return "\n".join(p for p in parts if p)
+
+    # -- article chat -------------------------------------------------------
+    def _chat_entry_id(self, item_id: int, title: str, create: bool = True):
+        """Return the single persistent chat kb_entry id for an article.
+
+        One thread per item, marked mode='chat'. Created on demand (under the
+        caller's lock) when ``create`` is set.
+        """
+        row = self.ctx.conn.execute(
+            "SELECT id FROM kb_entry WHERE item_id=? AND mode='chat' ORDER BY id LIMIT 1",
+            (int(item_id),)).fetchone()
+        if row is not None:
+            return int(row["id"])
+        if not create:
+            return None
+        term = _term_from_span(title) or "Article chat"
+        irow = self.ctx.conn.execute(
+            "SELECT url FROM corpus_item WHERE id=?", (int(item_id),)).fetchone()
+        source_url = irow["url"] if irow else None
+        cur = self.ctx.conn.execute(
+            "INSERT INTO kb_entry (term, span_text, item_id, source_url, mode, "
+            "tag, created_at) VALUES (?,?,?,?,?,?,?)",
+            (term, title or term, int(item_id), source_url, "chat", "chat", utcnow()))
+        self.ctx.conn.commit()
+        return int(cur.lastrowid)
+
+    def _api_chat_get(self, query: Dict):
+        item_id = query.get("item_id", [None])[0]
+        if not item_id:
+            return self._send_json({"error": "item_id required"}, status=400)
+        with self.ctx.lock:
+            entry_id = self._chat_entry_id(int(item_id), "", create=False)
+            messages = []
+            if entry_id is not None:
+                rows = self.ctx.conn.execute(
+                    "SELECT role, content, created_at FROM kb_message "
+                    "WHERE kb_entry_id=? ORDER BY id", (entry_id,)).fetchall()
+                messages = [
+                    {"role": r["role"], "content": r["content"], "created_at": r["created_at"]}
+                    for r in rows
+                ]
+        self._send_json({"item_id": int(item_id), "kb_entry_id": entry_id,
+                         "messages": messages})
+
+    def _api_chat(self):
+        data = self._read_json()
+        item_id = data.get("item_id")
+        message = (data.get("message") or "").strip()
+        model = data.get("model") or self.ctx.default_model
+        if not item_id or not message:
+            return self._send_json({"error": "item_id and message required"}, status=400)
+
+        with self.ctx.lock:
+            row = self.ctx.conn.execute(
+                "SELECT * FROM corpus_item WHERE id=?", (int(item_id),)).fetchone()
+            if row is None:
+                return self._send_json({"error": "not found"}, status=404)
+            item = self._item_dict(row)
+            entry_id = self._chat_entry_id(int(item_id), item.get("title") or "")
+            hist_rows = self.ctx.conn.execute(
+                "SELECT role, content FROM kb_message WHERE kb_entry_id=? ORDER BY id",
+                (entry_id,)).fetchall()
+            history = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
+            bundle = retrieval.retrieve_context(self.ctx.conn, item, message)
+
+        graph = {"concepts": bundle["concepts"], "edges": bundle["edges"]}
+        answer = ai.chat(item, history, message, kb_notes=bundle["notes"],
+                         graph=graph, excerpt=bundle["excerpt"], model=model)
+
+        now = utcnow()
+        answer_text = self._answer_text(answer)
+        with self.ctx.lock:
+            self.ctx.conn.execute(
+                "INSERT INTO kb_message (kb_entry_id, role, content, created_at) "
+                "VALUES (?,?,?,?)", (entry_id, "user", message, now))
+            self.ctx.conn.execute(
+                "INSERT INTO kb_message (kb_entry_id, role, content, created_at) "
+                "VALUES (?,?,?,?)", (entry_id, "assistant", answer_text, now))
+            reindex_entry(self.ctx.conn, entry_id)
+            self.ctx.conn.commit()
+        self._send_json({
+            "answer": answer,
+            "model": model,
+            "kb_entry_id": entry_id,
+            "grounded": bundle["grounded"],
+        })
 
     # -- knowledge base -----------------------------------------------------
     def _entry_dict(self, row: sqlite3.Row, with_messages: bool = False) -> dict:

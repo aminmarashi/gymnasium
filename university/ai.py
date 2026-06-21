@@ -188,12 +188,40 @@ def summarize_item(item: dict, model: str) -> Dict[str, object]:
     }
 
 
+def _grounding_block(kb_notes: Optional[List[dict]] = None,
+                     graph: Optional[dict] = None) -> str:
+    """Render the user's own KB notes + concept map as a compact context block.
+
+    Wrapped in BEGIN_GROUNDING/END_GROUNDING sentinels so it is easy to spot in
+    the prompt (and verifiable in tests). Returns "" when there is nothing.
+    """
+    lines: List[str] = []
+    for n in (kb_notes or []):
+        term = (n.get("term") or "").strip()
+        definition = (n.get("definition") or "").strip()
+        if term or definition:
+            lines.append("- {}: {}".format(term, definition) if definition else "- {}".format(term))
+    concepts = list((graph or {}).get("concepts") or [])
+    edges = list((graph or {}).get("edges") or [])
+    if concepts:
+        lines.append("Concepts you have mapped: " + ", ".join(str(c) for c in concepts))
+    if edges:
+        lines.append("Links between them: " + "; ".join(str(e) for e in edges))
+    if not lines:
+        return ""
+    return "BEGIN_GROUNDING\n" + "\n".join(lines) + "\nEND_GROUNDING"
+
+
 def explain(span_text: str, mode: str, item: dict, model: str,
-            history: Optional[List[dict]] = None) -> Dict[str, object]:
+            history: Optional[List[dict]] = None,
+            kb_notes: Optional[List[dict]] = None,
+            graph: Optional[dict] = None) -> Dict[str, object]:
     """Explain/summarize/answer about a selected span.
 
     Returns {lead, body, analogy?}. ``mode`` is explain | summarize | ask.
     ``history`` is a list of {role, content} prior turns (used for 'ask').
+    ``kb_notes``/``graph`` optionally ground the answer in the reader's own
+    saved knowledge base and concept map (used for follow-up questions).
     """
     title = item.get("title", "") if item else ""
     context = item.get("abstract") or item.get("why") or "" if item else ""
@@ -222,12 +250,18 @@ def explain(span_text: str, mode: str, item: dict, model: str,
             who = "Reader" if h.get("role") == "user" else "You"
             turns.append("{}: {}".format(who, h.get("content", "")))
         hist_block = "\n\nConversation so far:\n" + "\n".join(turns)
+    ground = _grounding_block(kb_notes, graph)
+    ground_block = ""
+    if ground:
+        ground_block = (
+            "\n\nDraw on the reader's own saved notes and concept map below when "
+            "relevant:\n" + ground)
     prompt = (
         "Source: {title}\nContext: {context}\n\n"
-        "Selected text: \"{span}\"{hist}\n\n{instr}\n"
+        "Selected text: \"{span}\"{ground}{hist}\n\n{instr}\n"
         "Return ONLY the JSON object."
     ).format(title=title, context=context[:1500], span=span_text[:1500],
-             hist=hist_block, instr=instr)
+             ground=ground_block, hist=hist_block, instr=instr)
     text = generate(prompt, model, system=_PLAIN_REGISTER)
     data = _extract_json(text)
     if isinstance(data, dict) and (data.get("lead") or data.get("body")):
@@ -239,6 +273,54 @@ def explain(span_text: str, mode: str, item: dict, model: str,
             out["analogy"] = str(data["analogy"]).strip()
         return out
     # Fallback: treat the whole reply as the body.
+    return {"lead": "In plain words", "body": text.strip()}
+
+
+def chat(item: dict, history: Optional[List[dict]], message: str,
+         kb_notes: Optional[List[dict]] = None, graph: Optional[dict] = None,
+         excerpt: Optional[str] = None, model: str = "") -> Dict[str, object]:
+    """Answer a question ABOUT the whole article, grounded in the user's KB.
+
+    Returns {lead, body}. The answer is grounded in the supplied knowledge-base
+    notes and concept map, explicitly drawing on what the reader already saved
+    or mapped when it is relevant. Reuses the opencode ``generate`` path.
+    """
+    title = item.get("title", "") if item else ""
+    if excerpt is None:
+        excerpt = (item.get("summary_readable") if item else None) or \
+            (item.get("abstract") or item.get("why") or "" if item else "")
+        if isinstance(excerpt, list):
+            excerpt = " ".join(str(s) for s in excerpt)
+    hist_block = ""
+    if history:
+        turns = []
+        for h in history:
+            who = "Reader" if h.get("role") == "user" else "You"
+            turns.append("{}: {}".format(who, h.get("content", "")))
+        hist_block = "\n\nConversation so far:\n" + "\n".join(turns)
+    ground = _grounding_block(kb_notes, graph)
+    ground_block = ""
+    if ground:
+        ground_block = (
+            "\n\nGround your answer in the reader's OWN saved notes and concept "
+            "map below. When something here is relevant, use it and refer to what "
+            "they already saved or mapped:\n" + ground)
+    prompt = (
+        "ARTICLE_CHAT_MODE. You are chatting with a reader about a whole "
+        "article.\n\nArticle title: {title}\nArticle excerpt:\n{excerpt}"
+        "{ground}{hist}\n\nReader's question: \"{message}\"\n\n"
+        "Answer the question about the article in plain words. "
+        "Return ONLY JSON {{\"lead\": short headline, \"body\": one short "
+        "paragraph}}."
+    ).format(title=title, excerpt=str(excerpt)[:1500], ground=ground_block,
+             hist=hist_block, message=(message or "")[:1500])
+    text = generate(prompt, model, system=_PLAIN_REGISTER)
+    data = _extract_json(text)
+    if isinstance(data, dict) and (data.get("lead") or data.get("body")):
+        return {
+            "lead": str(data.get("lead") or "").strip(),
+            "body": str(data.get("body") or "").strip(),
+        }
     return {"lead": "In plain words", "body": text.strip()}
 
 

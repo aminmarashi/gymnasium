@@ -14,7 +14,7 @@ import types
 
 import pytest
 
-from university import ai, auth, db, docs, ingest, map_store, refresh
+from university import ai, auth, db, docs, ingest, map_store, refresh, retrieval
 
 FAKE_OPENCODE = os.path.join(os.path.dirname(__file__), "fixtures", "fake_opencode.py")
 
@@ -785,4 +785,123 @@ def test_auth_gate_and_full_flow(live_server):
     status, _, _ = _http("POST", base + "/api/logout", {}, cookie=cookie)
     assert status == 200
     status, _, _ = _http("GET", base + "/api/feed", cookie=cookie)
+    assert status == 401
+
+
+# --------------------------------------------------------------------------
+# retrieval (knowledge-grounded context) — pure function
+# --------------------------------------------------------------------------
+def test_retrieve_context_grounds_and_is_bounded(conn):
+    paper = _insert_paper(conn, "rc-1", {"arxiv_id": "rc-1"}, url="http://x")
+    pid = paper["id"]
+    # One note tied to this article, one general note; both become concepts.
+    _save_entry(conn, "Router balancing", "router balancing span", item_id=pid)
+    _save_entry(conn, "Experts", "experts span")
+    nodes = map_store.get_map(conn)["nodes"]
+    map_store.add_edge(conn, nodes[0]["id"], nodes[1]["id"], "manual")
+
+    item = {"id": pid, "title": "Mixture of Experts",
+            "abstract": "Routing tokens to experts in MoE."}
+    bundle = retrieval.retrieve_context(conn, item, "router")
+
+    # FTS / item-tie surfaces the seeded relevant note.
+    terms = [n["term"] for n in bundle["notes"]]
+    assert "Router balancing" in terms
+    assert "Router balancing" in bundle["grounded"]["notes"]
+    # The concept map contributes both linked concepts and an edge between them.
+    assert "Router balancing" in bundle["concepts"]
+    assert "Experts" in bundle["concepts"]
+    assert any("Router balancing -- Experts" == e or "Experts -- Router balancing" == e
+               for e in bundle["edges"])
+    # A short article excerpt is included for the model to chat about.
+    assert "expert" in bundle["excerpt"].lower()
+    # Bounded.
+    assert len(bundle["notes"]) <= retrieval.MAX_NOTES
+    assert len(bundle["concepts"]) <= retrieval.MAX_CONCEPTS
+    assert len(bundle["edges"]) <= retrieval.MAX_EDGES
+
+
+def test_retrieve_context_excludes_chat_entries(conn):
+    """A chat thread (mode='chat') must not ground itself."""
+    paper = _insert_paper(conn, "rc-2", {"arxiv_id": "rc-2"}, url="http://x")
+    pid = paper["id"]
+    conn.execute(
+        "INSERT INTO kb_entry (term, span_text, item_id, mode, tag, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        ("Chat thread", "Some Title", pid, "chat", "chat", db.utcnow()))
+    conn.commit()
+    item = {"id": pid, "title": "Some Title", "abstract": "Body."}
+    bundle = retrieval.retrieve_context(conn, item, "title")
+    assert all(n["term"] != "Chat thread" for n in bundle["notes"])
+
+
+# --------------------------------------------------------------------------
+# article chat (persistent per-item thread, knowledge-grounded)
+# --------------------------------------------------------------------------
+def test_article_chat_thread_and_grounding(live_server):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+    status, feed, _ = _http("GET", base + "/api/feed?kind=paper", cookie=cookie)
+    item_id = feed["items"][0]["id"]
+
+    # Seed a distinctive KB note tied to this article so retrieval can ground.
+    status, saved, _ = _http("POST", base + "/api/kb/save", {
+        "span_text": "Photosynthesis routing trick", "item_id": item_id,
+        "mode": "explain", "model": "openai/gpt-fake",
+        "answer": {"lead": "Lead", "body": "A note about photosynthesis."}},
+        cookie=cookie)
+    assert status == 200
+    term = saved["entry"]["term"]
+
+    # Chat about the article — a question that should pull in the seeded note.
+    status, res, _ = _http("POST", base + "/api/chat", {
+        "item_id": item_id, "message": "Tell me about photosynthesis here",
+        "model": "openai/gpt-fake"}, cookie=cookie)
+    assert status == 200
+    assert res["answer"]["body"]
+    entry_id = res["kb_entry_id"]
+    assert entry_id
+    # The grounded list exposes what was injected (verifiable without a real model).
+    assert term in res["grounded"]["notes"]
+    # And the fake AI provably RECEIVED the grounding (it echoes it back).
+    assert "Photosynthesis routing trick" in res["answer"]["body"]
+
+    # The thread persisted: one user + one assistant message.
+    status, thread, _ = _http("GET", base + "/api/chat?item_id={}".format(item_id),
+                              cookie=cookie)
+    assert status == 200
+    assert thread["kb_entry_id"] == entry_id
+    assert len(thread["messages"]) == 2
+    assert thread["messages"][0]["role"] == "user"
+
+    # A follow-up continues the SAME single thread (no new entry).
+    status, res2, _ = _http("POST", base + "/api/chat", {
+        "item_id": item_id, "message": "And what about the router?",
+        "model": "openai/gpt-fake"}, cookie=cookie)
+    assert status == 200 and res2["kb_entry_id"] == entry_id
+
+    status, thread2, _ = _http("GET", base + "/api/chat?item_id={}".format(item_id),
+                               cookie=cookie)
+    assert len(thread2["messages"]) == 4
+
+    # The chat is FTS-searchable like the rest of the KB.
+    status, found, _ = _http("GET", base + "/api/kb/search?q=photosynthesis", cookie=cookie)
+    assert any(e["id"] == entry_id for e in found["entries"])
+
+    # Chat entries do not clutter the concept map.
+    status, mp, _ = _http("GET", base + "/api/map", cookie=cookie)
+    assert all(n["kb_entry_id"] != entry_id for n in mp["nodes"])
+
+
+def test_chat_requires_item_and_message(live_server):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+    status, _, _ = _http("POST", base + "/api/chat", {"message": "hi"}, cookie=cookie)
+    assert status == 400
+    # gated without a cookie
+    status, _, _ = _http("POST", base + "/api/chat", {"item_id": 1, "message": "hi"})
     assert status == 401

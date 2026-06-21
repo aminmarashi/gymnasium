@@ -55,7 +55,8 @@ def refresh_from_entries(conn: sqlite3.Connection) -> int:
     """Ensure every kb_entry has a concept node. Returns nodes created."""
     rows = conn.execute(
         "SELECT id FROM kb_entry WHERE id NOT IN (SELECT kb_entry_id FROM concept "
-        "WHERE kb_entry_id IS NOT NULL) ORDER BY id"
+        "WHERE kb_entry_id IS NOT NULL) AND (mode IS NULL OR mode != 'chat') "
+        "ORDER BY id"
     ).fetchall()
     created = 0
     for r in rows:

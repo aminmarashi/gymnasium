@@ -278,6 +278,10 @@
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:10px">' + summaryHTML + '</div>' +
       '</div>' +
+      '<button class="gym-press" id="chatArticleBtn" style="display:inline-flex;align-items:center;gap:8px;height:42px;padding:0 18px;border:none;background:var(--sky-500);color:#fff;border-radius:999px;cursor:pointer;font:700 14px/1 var(--font-sans);margin-bottom:18px">' +
+        ico(ICON.send, 'style="width:17px;height:17px;stroke-width:2.2"') +
+        'Chat about this article' +
+      '</button>' +
       '<div style="display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:var(--sky-100);color:var(--sky-600);font:600 13px/1.3 var(--font-sans);margin-bottom:22px">' +
         ico('<path d="M4 7l5-3 6 3 5-2v12l-5 2-6-3-5 3z"></path>', 'style="width:16px;height:16px"') +
         'Select any text to explain, summarize, or ask — or tap an <span style="border-bottom:2px solid var(--spark-400);color:var(--spark-700)">underlined term</span>.' +
@@ -374,7 +378,53 @@
       return '<div style="font:700 10px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--fg-muted);padding:9px 10px 5px">' + esc(g.name) + '</div>' + items;
     }).join('');
   }
+  function renderChatPanel() {
+    var thread = S.thread.map(function (m) {
+      if (m.role === 'user') {
+        return '<div style="align-self:flex-end;max-width:86%;background:var(--sky-500);color:#fff;padding:10px 14px;border-radius:14px 14px 4px 14px;font:500 15px/1.5 var(--font-sans);white-space:pre-wrap">' + esc(m.content) + '</div>';
+      }
+      return '<div style="align-self:flex-start;max-width:90%;background:var(--paper-200);color:var(--fg-1);padding:10px 14px;border-radius:14px 14px 14px 4px;font:500 15px/1.6 var(--font-sans);white-space:pre-wrap">' + esc(m.content) + '</div>';
+    }).join('');
+    var grounded = '';
+    var g = S.chatGrounded;
+    if (g && ((g.notes && g.notes.length) || (g.concepts && g.concepts.length))) {
+      var parts = [];
+      var n = (g.notes || []).length;
+      if (n) parts.push('Grounded in ' + n + ' note' + (n === 1 ? '' : 's') + ' from your knowledge base');
+      if (g.concepts && g.concepts.length) parts.push('concepts: ' + g.concepts.join(', '));
+      grounded = '<div class="chat-grounded" style="align-self:flex-start;display:flex;align-items:center;gap:6px;font:600 12px/1.5 var(--font-sans);color:var(--fg-muted)">' +
+        ico(ICON.spark, 'style="fill:var(--spark-500);stroke:none;width:14px;height:14px;flex:0 0 auto"') +
+        '<span>' + esc(parts.join(' · ')) + '</span></div>';
+    }
+    var loading = S.busy
+      ? '<div style="align-self:flex-start;display:flex;align-items:center;gap:8px;color:var(--fg-3);font:500 14px/1.5 var(--font-sans)">' + ico(ICON.refresh, 'class="ico spin" style="width:16px;height:16px"') + 'Thinking…</div>' : '';
+    var empty = (!thread && !loading)
+      ? '<div style="color:var(--fg-3);font:500 15px/1.6 var(--font-sans)">Ask anything about this article. Answers draw on your saved notes and concept map.</div>' : '';
+    var menu = S.modelMenuOpen
+      ? '<div style="position:absolute;right:0;top:40px;z-index:50;width:250px;max-height:340px;overflow:auto;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:12px;box-shadow:var(--shadow-3);padding:6px;display:flex;flex-direction:column;gap:2px" class="gym-scroll">' + modelMenuHTML() + '</div>' : '';
+    var title = S.item ? S.item.title : 'this article';
+    return '' +
+      (S.isDesktop() ? '' : '<div style="display:flex;justify-content:center;padding:9px 0 2px"><div style="width:38px;height:4px;border-radius:2px;background:var(--paper-400)"></div></div>') +
+      '<div style="display:flex;align-items:center;gap:8px;padding:12px 14px 12px 16px;border-bottom:1px solid var(--border-hair);flex:0 0 auto">' +
+        '<span style="font:700 16px/1.2 var(--font-sans);color:var(--fg-1)">Chat about this article</span>' +
+        '<div style="position:relative;margin-left:auto">' +
+          '<button class="gym-press" id="modelBtn" style="display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 10px;border:1px solid var(--border-hair);background:var(--bg-surface);border-radius:999px;cursor:pointer;font:700 12px/1 var(--font-sans);color:var(--fg-2)"><span style="width:7px;height:7px;border-radius:50%;background:var(--grass-500);flex:0 0 auto"></span>' + esc(S.modelName()) + ico(ICON.chevron, 'style="width:14px;height:14px;stroke-width:2.4"') + '</button>' + menu +
+        '</div>' +
+        '<button class="gym-press" id="panelClose" aria-label="Close" style="display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:none;background:var(--paper-200);border-radius:9px;cursor:pointer;color:var(--fg-2)">' + ico(ICON.close, 'style="width:17px;height:17px;stroke-width:2.2"') + '</button>' +
+      '</div>' +
+      '<div class="gym-scroll" id="chatScroll" style="flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px">' +
+        '<div style="font:600 12px/1.5 var(--font-sans);color:var(--fg-muted)">About: “' + esc(title) + '”</div>' +
+        empty + thread + loading + grounded +
+      '</div>' +
+      '<div style="border-top:1px solid var(--border-hair);padding:12px 14px;display:flex;flex-direction:column;gap:10px;flex:0 0 auto">' +
+        '<div style="display:flex;gap:8px;align-items:center">' +
+          '<input class="gym-term-input" id="panelDraft" value="' + esc(S.draft) + '" placeholder="Ask about this article…" />' +
+          '<button class="gym-press" id="panelSend" aria-label="Send" style="display:inline-flex;align-items:center;justify-content:center;width:46px;height:46px;flex:0 0 auto;border:none;background:var(--sky-500);color:#fff;border-radius:10px;cursor:pointer">' + ico(ICON.send, 'style="width:19px;height:19px;stroke-width:2.2"') + '</button>' +
+        '</div>' +
+      '</div>';
+  }
   function renderPanel() {
+    if (S.chatMode) return renderChatPanel();
     var a = S.answer || { lead: '', body: '', analogy: null };
     var analogy = a.analogy
       ? '<div style="display:flex;gap:9px;align-items:flex-start;padding:11px 13px;border-radius:10px;background:var(--sky-100);font:500 14px/1.55 var(--font-sans);color:var(--fg-1)"><span style="font-weight:700;color:var(--sky-600);white-space:nowrap">Picture it</span><span>' + esc(a.analogy) + '</span></div>' : '';
@@ -654,13 +704,48 @@
   }
 
   function openPanel(span, mode) {
-    S.panelOpen = true; S.selText = span; S.mode = mode;
+    S.panelOpen = true; S.chatMode = false; S.selText = span; S.mode = mode;
     S.answer = null; S.thread = []; S.draft = '';
     S.savedEntryId = null; S.justSaved = false; S.busy = true; S.modelMenuOpen = false;
     hideToolbar();
     try { window.getSelection().removeAllRanges(); } catch (e) {}
     syncPanel();
     askServer(mode, null);
+  }
+  // -- article chat (whole-article, knowledge-grounded) --
+  function openChat() {
+    if (!S.item) return;
+    var id = S.item.id;
+    S.panelOpen = true; S.chatMode = true; S.modelMenuOpen = false;
+    S.thread = []; S.draft = ''; S.chatGrounded = null; S.chatEntryId = null;
+    S.busy = true;
+    hideToolbar();
+    try { window.getSelection().removeAllRanges(); } catch (e) {}
+    syncPanel();
+    API.chatThread(id).then(function (res) {
+      if (!S.chatMode || !S.item || S.item.id !== id) return;
+      S.busy = false;
+      S.chatEntryId = res.kb_entry_id || null;
+      S.thread = (res.messages || []).map(function (m) {
+        return { role: m.role, content: m.content };
+      });
+      syncPanel();
+    }).catch(function () { S.busy = false; syncPanel(); });
+  }
+  function sendChat() {
+    var q = (S.draft || '').trim(); if (!q || !S.item) return;
+    var id = S.item.id;
+    S.draft = '';
+    S.thread.push({ role: 'user', content: q });
+    S.busy = true; syncPanel();
+    API.chat({ item_id: id, message: q, model: S.model }).then(function (res) {
+      if (!S.chatMode || !S.item || S.item.id !== id) return;
+      S.busy = false;
+      S.chatEntryId = res.kb_entry_id || S.chatEntryId;
+      S.thread.push({ role: 'assistant', content: answerText(res.answer) });
+      S.chatGrounded = res.grounded || null;
+      syncPanel();
+    }).catch(function () { S.busy = false; toast('Chat failed'); syncPanel(); });
   }
   function askServer(mode, message) {
     var payload = {
@@ -696,7 +781,8 @@
     askServer('ask', q);
   }
   function closePanel() {
-    S.panelOpen = false; S.modelMenuOpen = false; hideToolbar(); syncPanel();
+    S.panelOpen = false; S.chatMode = false; S.modelMenuOpen = false;
+    hideToolbar(); syncPanel();
   }
   function saveEntry() {
     if (!S.answer || S.savedEntryId) return;
@@ -880,6 +966,7 @@
       }
       var mdBtn = e.target.closest('#mdAttachBtn');
       if (mdBtn) { var inp = $('mdFile'); if (inp) inp.click(); return; }
+      if (e.target.closest('#chatArticleBtn')) { openChat(); return; }
       var term = e.target.closest('.gym-term');
       if (term) { openPanel(term.getAttribute('data-term'), 'explain'); return; }
       var kbOpen = e.target.closest('.kb-open');
@@ -924,7 +1011,7 @@
       if (pick) { S.model = pick.getAttribute('data-id'); S.modelMenuOpen = false; syncPanel(); return; }
       var seg = e.target.closest('.gym-seg[data-mode]');
       if (seg) { setMode(seg.dataset.mode); return; }
-      if (e.target.closest('#panelSend')) { send(); return; }
+      if (e.target.closest('#panelSend')) { S.chatMode ? sendChat() : send(); return; }
       if (e.target.closest('#panelSave')) { saveEntry(); return; }
       if (e.target.closest('.panel-gosaved')) { closePanel(); navigate('saved'); return; }
     });
@@ -932,7 +1019,10 @@
       if (e.target.id === 'panelDraft') S.draft = e.target.value;
     });
     $('panel').addEventListener('keydown', function (e) {
-      if (e.target.id === 'panelDraft' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+      if (e.target.id === 'panelDraft' && e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        S.chatMode ? sendChat() : send();
+      }
     });
 
     // Re-sync panel mode on viewport change.

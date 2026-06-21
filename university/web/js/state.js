@@ -36,6 +36,10 @@
     thread: [],               // [{role:'user'|'assistant', content}]
     savedEntryId: null,       // set once the entry is persisted
     justSaved: false,
+    // article chat (whole-article, knowledge-grounded conversation)
+    chatMode: false,          // panel is in article-chat mode
+    chatEntryId: null,        // persistent per-article chat kb_entry id
+    chatGrounded: null,       // {notes:[term], concepts:[label]} last grounding
     draft: '',
     affordance: null,         // {x, y} for the floating toolbar
     // models
