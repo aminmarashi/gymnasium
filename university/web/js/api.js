@@ -31,11 +31,17 @@
     me: function () { return request('GET', '/api/me'); },
     logout: function () { return request('POST', '/api/logout', {}); },
     models: function () { return request('GET', '/api/models'); },
-    feed: function (kind, limit) {
+    feed: function (kind, opts) {
+      opts = opts || {};
       var q = [];
       if (kind) q.push('kind=' + encodeURIComponent(kind));
-      if (limit) q.push('limit=' + limit);
+      ['q', 'sort', 'author', 'company', 'publication', 'language', 'limit'].forEach(function (k) {
+        if (opts[k] != null && opts[k] !== '') q.push(k + '=' + encodeURIComponent(opts[k]));
+      });
       return request('GET', '/api/feed' + (q.length ? '?' + q.join('&') : ''));
+    },
+    facets: function (kind) {
+      return request('GET', '/api/feed/facets?kind=' + encodeURIComponent(kind));
     },
     item: function (id) { return request('GET', '/api/item/' + id); },
     documentUrl: function (id) { return '/api/item/' + id + '/document'; },

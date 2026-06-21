@@ -55,7 +55,8 @@
   }
 
   // ---- nav -----------------------------------------------------------------
-  var SECTION = { feed: 'Frontier feed', reader: 'Reader', saved: 'Knowledge base', map: 'Knowledge map' };
+  var SECTION = { papers: 'Papers', repos: 'Repos', reader: 'Reader', saved: 'Knowledge base', map: 'Knowledge map' };
+  function kindFor(screen) { return screen === 'repos' ? 'repo' : 'paper'; }
   function setNavActive() {
     var screen = S.screen;
     document.querySelectorAll('.rail-nav[data-screen]').forEach(function (b) {
@@ -89,37 +90,87 @@
     var kindLabel = item.kind === 'repo' ? 'Repo' : 'Paper';
     var why = S.density === 'comfort' && item.why
       ? '<p style="font:500 15px/1.55 var(--font-sans);color:var(--fg-2)">' + esc(item.why) + '</p>' : '';
+    // Repo cards show stars + language; paper cards show the source line.
+    var metaLeft;
+    if (item.kind === 'repo') {
+      var bits = [];
+      if (item.stars != null) bits.push('★ ' + item.stars.toLocaleString());
+      if (item.language) bits.push(esc(item.language));
+      metaLeft = '<span style="font:600 12px/1.4 var(--font-sans);color:var(--fg-3)">' + (bits.join(' · ') || esc(item.source || '')) + '</span>';
+    } else {
+      metaLeft = '<span style="font:600 12px/1.4 var(--font-sans);color:var(--fg-3)">' + esc(item.source || '') + '</span>';
+    }
+    var ratingLabel = item.kind === 'repo' ? 'Stars' : 'Impact';
     return '' +
       '<article class="gym-card feed-card" data-id="' + item.id + '" style="background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px;box-shadow:var(--shadow-1);padding:16px 18px;cursor:pointer;display:flex;flex-direction:column;gap:10px">' +
         '<div style="display:flex;align-items:center;gap:10px">' +
           '<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font:700 11px/1.4 var(--font-sans);background:var(--spark-100);color:var(--spark-700)">' + kindLabel + '</span>' +
-          '<span style="font:600 12px/1.4 var(--font-sans);color:var(--fg-3)">' + esc(item.source || '') + '</span>' +
+          metaLeft +
           '<span style="margin-left:auto;font:600 12px/1.4 var(--font-sans);color:var(--fg-muted)">' + esc(recency(item.published_at)) + '</span>' +
         '</div>' +
         '<h3 style="font:700 19px/1.3 var(--font-sans);color:var(--fg-1);letter-spacing:-.01em">' + esc(item.title) + '</h3>' +
         why +
         '<div style="display:flex;align-items:center;gap:12px;margin-top:2px">' +
-          '<span style="font:700 12px/1 var(--font-sans);color:var(--fg-3);font-variant-numeric:tabular-nums">Impact ' + (item.signal || 0) + '</span>' +
+          '<span style="font:700 12px/1 var(--font-sans);color:var(--fg-3);font-variant-numeric:tabular-nums">' + ratingLabel + ' ' + (item.signal || 0) + '</span>' +
           '<span style="position:relative;flex:1;max-width:140px;height:6px;border-radius:3px;background:var(--paper-200);overflow:hidden"><span style="position:absolute;left:0;top:0;bottom:0;width:' + (item.signal || 0) + '%;background:var(--spark-500);border-radius:3px"></span></span>' +
           '<span style="flex:1"></span>' +
           '<button class="gym-press feed-read btn-spark" data-id="' + item.id + '">Read' + ico(ICON.arrow, 'style="width:16px;height:16px;stroke-width:2.2"') + '</button>' +
         '</div>' +
       '</article>';
   }
-  function renderFeed() {
-    var cards = S.feed.length
-      ? S.feed.map(feedCard).join('')
-      : '<div style="text-align:center;padding:48px 24px;color:var(--fg-3);font:500 15px/1.5 var(--font-sans)">No items yet. Try Refresh feed.</div>';
+  // Build one filter <select> from a facet list ({values:[{value,count}], capped}).
+  function filterSelect(name, label, facet, current) {
+    var opts = '<option value="">' + esc(label) + '</option>';
+    var values = (facet && facet.values) || [];
+    // Keep the active value selectable even if it fell outside the capped list.
+    var present = false;
+    values.forEach(function (v) {
+      if (v.value === current) present = true;
+      opts += '<option value="' + esc(v.value) + '"' + (v.value === current ? ' selected' : '') + '>' + esc(v.value) + ' (' + v.count + ')</option>';
+    });
+    if (current && !present) opts += '<option value="' + esc(current) + '" selected>' + esc(current) + '</option>';
+    return '<select class="feed-filter" data-filter="' + name + '" style="height:38px;border:1.5px solid var(--border-default);background:var(--bg-input);color:var(--fg-1);border-radius:10px;padding:0 10px;font:500 14px/1 var(--font-sans);cursor:pointer;max-width:200px">' + opts + '</select>';
+  }
+  function renderFeed(kind) {
+    var fs = S.feeds[kind];
+    var isRepo = kind === 'repo';
+    var title = isRepo ? 'Repos' : 'Papers';
+    var blurb = isRepo
+      ? 'Repositories from tracked labs. Search, filter and sort.'
+      : 'Papers from the frontier labs. Search, filter and sort.';
+    var cards = fs.items.length
+      ? fs.items.map(feedCard).join('')
+      : '<div style="text-align:center;padding:48px 24px;color:var(--fg-3);font:500 15px/1.5 var(--font-sans)">No items match. Try clearing the search or filters, or Refresh feed.</div>';
+    var filters;
+    if (isRepo) {
+      filters = filterSelect('company', 'All companies', fs.facets && fs.facets.companies, fs.filters.company) +
+                filterSelect('language', 'All languages', fs.facets && fs.facets.languages, fs.filters.language);
+    } else {
+      filters = filterSelect('author', 'All authors', fs.facets && fs.facets.authors, fs.filters.author) +
+                filterSelect('company', 'All companies', fs.facets && fs.facets.companies, fs.filters.company) +
+                filterSelect('publication', 'All publications', fs.facets && fs.facets.publications, fs.filters.publication);
+    }
     return '' +
-      '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:18px">' +
+      '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px">' +
         '<div>' +
-          '<h1 style="font:700 32px/1.1 var(--font-display);letter-spacing:-.02em;color:var(--fg-1)">Frontier</h1>' +
-          '<p style="font:500 15px/1.5 var(--font-sans);color:var(--fg-3);margin-top:6px">Papers and repos, ranked by impact. Newest first.</p>' +
+          '<h1 style="font:700 32px/1.1 var(--font-display);letter-spacing:-.02em;color:var(--fg-1)">' + title + '</h1>' +
+          '<p style="font:500 15px/1.5 var(--font-sans);color:var(--fg-3);margin-top:6px">' + blurb + '</p>' +
         '</div>' +
         '<div class="seg-row">' +
           '<button class="gym-seg' + (S.density === 'comfort' ? ' on' : '') + '" data-d="comfort">Comfort</button>' +
           '<button class="gym-seg' + (S.density === 'compact' ? ' on' : '') + '" data-d="compact">Compact</button>' +
         '</div>' +
+      '</div>' +
+      '<div style="position:relative;margin-bottom:12px">' +
+        ico(ICON.search, 'style="position:absolute;left:13px;top:50%;transform:translateY(-50%);width:18px;height:18px;stroke:var(--ink-400);pointer-events:none"') +
+        '<input class="gym-term-input" id="feedSearch" value="' + esc(fs.q) + '" placeholder="Search ' + (isRepo ? 'repos' : 'papers') + '…" style="padding-left:40px;height:46px" />' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px">' +
+        '<div class="seg-row">' +
+          '<button class="gym-seg feed-sort' + (fs.sort === 'recency' ? ' on' : '') + '" data-sort="recency">Recency</button>' +
+          '<button class="gym-seg feed-sort' + (fs.sort === 'rating' ? ' on' : '') + '" data-sort="rating">Rating</button>' +
+        '</div>' +
+        '<span style="flex:1"></span>' + filters +
       '</div>' +
       '<div style="display:flex;flex-direction:column;gap:14px">' + cards + '</div>';
   }
@@ -176,7 +227,9 @@
       // Markdown (uploaded or auto-converted) becomes the reader body (no
       // [[term]] re-marking). A small label shows where it came from.
       var srcLabel = it._markdownSource === 'user'
-        ? 'Your uploaded markdown' : 'Auto-converted from the original';
+        ? 'Your uploaded markdown'
+        : it._markdownSource === 'readme'
+          ? 'README' : 'Auto-converted from the original';
       var labelHTML = '<div style="display:inline-flex;align-items:center;gap:6px;font:600 12px/1.3 var(--font-sans);color:var(--fg-muted);margin-bottom:14px">' + esc(srcLabel) + '</div>';
       bodyHTML = labelHTML + '<div class="gym-md" style="font:500 17px/1.7 var(--font-sans);color:var(--fg-1);max-width:64ch">' + it._markdownHTML + '</div>';
     } else if (it._markdownLoading) {
@@ -210,7 +263,7 @@
       '</div>';
 
     return '<div class="gym-read" id="readBody">' +
-      '<button class="gym-press reader-back" data-screen="feed" style="display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px 0 8px;border:none;background:none;color:var(--fg-3);cursor:pointer;font:600 14px/1 var(--font-sans);margin-bottom:12px;border-radius:8px">' + ico(ICON.back, 'style="width:18px;height:18px"') + 'Feed</button>' +
+      '<button class="gym-press reader-back" style="display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px 0 8px;border:none;background:none;color:var(--fg-3);cursor:pointer;font:600 14px/1 var(--font-sans);margin-bottom:12px;border-radius:8px">' + ico(ICON.back, 'style="width:18px;height:18px"') + (it.kind === 'repo' ? 'Repos' : 'Papers') + '</button>' +
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">' +
         '<span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font:700 11px/1.4 var(--font-sans);background:var(--spark-100);color:var(--spark-700)">' + kindLabel + '</span>' + tags +
       '</div>' +
@@ -381,7 +434,7 @@
   function render() {
     setNavActive();
     var host = $('screen');
-    if (S.screen === 'feed') host.innerHTML = renderFeed();
+    if (S.screen === 'papers' || S.screen === 'repos') host.innerHTML = renderFeed(kindFor(S.screen));
     else if (S.screen === 'reader') host.innerHTML = renderReader();
     else if (S.screen === 'saved') host.innerHTML = renderSaved();
     else if (S.screen === 'map') { host.innerHTML = renderMap(); wireMap(); }
@@ -390,7 +443,13 @@
 
   // ---- hash router ---------------------------------------------------------
   // Hash-based so it works against the static file server with no backend
-  // change. Routes: #/ or #/feed, #/read/<id>, #/saved[?q=...], #/map.
+  // change. Routes: #/papers[?q&sort&author&company&publication],
+  // #/repos[?q&sort&company&language], #/read/<id>, #/saved[?q=...], #/map.
+  // #/ or #/feed (legacy) fall through to #/papers.
+  var FEED_PARAMS = {
+    paper: ['q', 'sort', 'author', 'company', 'publication'],
+    repo: ['q', 'sort', 'company', 'language']
+  };
   function parseHash() {
     var raw = location.hash || '';
     if (raw.charAt(0) === '#') raw = raw.slice(1);
@@ -399,23 +458,45 @@
     if (qi !== -1) { query = raw.slice(qi + 1); raw = raw.slice(0, qi); }
     var parts = raw.split('/').filter(Boolean);
     var seg = parts[0] || '';
+    var sp; try { sp = new URLSearchParams(query); } catch (e) { sp = new URLSearchParams(''); }
     if (seg === 'read') {
       return { screen: 'reader', id: parts[1] ? parseInt(parts[1], 10) : null };
     }
+    if (seg === 'papers' || seg === 'repos') {
+      var kind = kindFor(seg);
+      var filters = {};
+      FEED_PARAMS[kind].forEach(function (k) {
+        if (k === 'q' || k === 'sort') return;
+        filters[k] = sp.get(k) || '';
+      });
+      return {
+        screen: seg, kind: kind,
+        q: sp.get('q') || '',
+        sort: sp.get('sort') === 'rating' ? 'rating' : 'recency',
+        filters: filters
+      };
+    }
     if (seg === 'saved') {
-      var q = '';
-      try { q = new URLSearchParams(query).get('q') || ''; } catch (e) { q = ''; }
-      return { screen: 'saved', q: q };
+      return { screen: 'saved', q: sp.get('q') || '' };
     }
     if (seg === 'map') return { screen: 'map' };
-    return { screen: 'feed' };  // #/ , #/feed, or anything unrecognized
+    return { screen: 'papers', kind: 'paper', q: '', sort: 'recency', filters: {} };
   }
   function buildHash(screen, opts) {
     opts = opts || {};
     if (screen === 'reader') return '#/read/' + opts.id;
     if (screen === 'saved') return '#/saved' + (opts.q ? '?q=' + encodeURIComponent(opts.q) : '');
     if (screen === 'map') return '#/map';
-    return '#/feed';
+    // papers / repos: serialize this feed's q + sort + active filters.
+    var kind = kindFor(screen);
+    var fs = S.feeds[kind];
+    var q = [];
+    if (fs.q) q.push('q=' + encodeURIComponent(fs.q));
+    if (fs.sort && fs.sort !== 'recency') q.push('sort=' + encodeURIComponent(fs.sort));
+    Object.keys(fs.filters).forEach(function (k) {
+      if (fs.filters[k]) q.push(k + '=' + encodeURIComponent(fs.filters[k]));
+    });
+    return '#/' + screen + (q.length ? '?' + q.join('&') : '');
   }
   // Real in-app navigation: push a history entry (or replace it) and apply.
   // Setting location.hash fires hashchange, which is where the route is
@@ -429,7 +510,7 @@
   function applyRoute() {
     var r = parseHash();
     if (r.screen === 'reader') {
-      if (r.id == null || isNaN(r.id)) { navigate('feed', null, true); return; }
+      if (r.id == null || isNaN(r.id)) { navigate('papers', null, true); return; }
       openReader(r.id);
       return;
     }
@@ -440,12 +521,59 @@
       return;
     }
     if (r.screen === 'map') { go('map'); loadMap(); return; }
-    go('feed');
+    // papers / repos: hydrate this feed's state from the hash, then query.
+    var fs = S.feeds[r.kind];
+    fs.q = r.q;
+    fs.sort = r.sort;
+    Object.keys(fs.filters).forEach(function (k) { fs.filters[k] = (r.filters[k] || ''); });
+    S.readerReturn = location.hash || ('#/' + r.screen);
+    go(r.screen);
+    if (!fs.facets) loadFacets(r.kind);
+    loadFeed(r.kind);
   }
 
   // ====================================================================
   // BEHAVIOUR
   // ====================================================================
+  // -- feeds (papers / repos) --
+  function feedParams(kind) {
+    var fs = S.feeds[kind];
+    var p = { q: fs.q, sort: fs.sort, limit: 60 };
+    Object.keys(fs.filters).forEach(function (k) { if (fs.filters[k]) p[k] = fs.filters[k]; });
+    return p;
+  }
+  function loadFeed(kind) {
+    return API.feed(kind, feedParams(kind)).then(function (res) {
+      S.feeds[kind].items = res.items || [];
+      if (S.screen === (kind === 'repo' ? 'repos' : 'papers')) render();
+    }).catch(function () {});
+  }
+  function loadFacets(kind) {
+    return API.facets(kind).then(function (f) {
+      S.feeds[kind].facets = f;
+      if (S.screen === (kind === 'repo' ? 'repos' : 'papers')) render();
+    }).catch(function () {});
+  }
+  // Live search: reflect the query in the URL (replaceState so typing doesn't
+  // spam Back/Forward), debounce the query, and re-render keeping caret/focus.
+  var feedTimer = null;
+  function onFeedSearch(kind, v) {
+    S.feeds[kind].q = v;
+    history.replaceState(null, '', buildHash(kind === 'repo' ? 'repos' : 'papers'));
+    clearTimeout(feedTimer);
+    feedTimer = setTimeout(function () {
+      API.feed(kind, feedParams(kind)).then(function (res) {
+        S.feeds[kind].items = res.items || [];
+        if (S.screen !== (kind === 'repo' ? 'repos' : 'papers')) return;
+        var input = $('feedSearch');
+        var pos = input ? input.selectionStart : null;
+        $('screen').innerHTML = renderFeed(kind);
+        var ni = $('feedSearch');
+        if (ni) { ni.focus(); if (pos != null) try { ni.setSelectionRange(pos, pos); } catch (e) {} }
+      }).catch(function () {});
+    }, 220);
+  }
+
   function openReader(id) {
     S.screen = 'reader';
     S.item = null; S.summaryTerms = [];
@@ -730,15 +858,26 @@
 
     // Screen-level delegation.
     $('screen').addEventListener('click', function (e) {
+      var sortBtn = e.target.closest('.feed-sort[data-sort]');
+      if (sortBtn) {
+        var sk = kindFor(S.screen);
+        S.feeds[sk].sort = sortBtn.dataset.sort;
+        navigate(S.screen);
+        return;
+      }
       var card = e.target.closest('.feed-card, .feed-read');
       if (card) {
         var id = card.getAttribute('data-id');
-        if (id) { navigate('reader', { id: parseInt(id, 10) }); return; }
+        if (id) { S.readerReturn = location.hash; navigate('reader', { id: parseInt(id, 10) }); return; }
       }
       var seg = e.target.closest('.gym-seg[data-d]');
       if (seg) { S.density = seg.dataset.d; render(); return; }
       var back = e.target.closest('.reader-back');
-      if (back) { navigate('feed'); return; }
+      if (back) {
+        if (S.readerReturn && location.hash !== S.readerReturn) location.hash = S.readerReturn;
+        else navigate('papers');
+        return;
+      }
       var mdBtn = e.target.closest('#mdAttachBtn');
       if (mdBtn) { var inp = $('mdFile'); if (inp) inp.click(); return; }
       var term = e.target.closest('.gym-term');
@@ -748,11 +887,18 @@
     });
     $('screen').addEventListener('input', function (e) {
       if (e.target.id === 'kbSearch') onKbSearch(e.target.value);
+      else if (e.target.id === 'feedSearch') onFeedSearch(kindFor(S.screen), e.target.value);
     });
     $('screen').addEventListener('change', function (e) {
       if (e.target.id === 'mdFile' && e.target.files && e.target.files[0]) {
         attachMarkdown(e.target.files[0]);
         e.target.value = '';
+      }
+      var filt = e.target.closest && e.target.closest('.feed-filter');
+      if (filt) {
+        var fk = kindFor(S.screen);
+        S.feeds[fk].filters[filt.getAttribute('data-filter')] = filt.value;
+        navigate(S.screen);
       }
     });
 
@@ -808,7 +954,9 @@
         if (st.status === 'done') {
           clearInterval(refreshPoll);
           toast('Feed updated');
-          API.feed(null, 60).then(function (res) { S.feed = res.items || []; if (S.screen === 'feed') render(); });
+          // Re-pull both feeds' facets and the active feed's items.
+          loadFacets('paper'); loadFacets('repo');
+          if (S.screen === 'papers' || S.screen === 'repos') loadFeed(kindFor(S.screen));
         } else if (st.status === 'error') {
           clearInterval(refreshPoll);
           toast('Refresh failed');
@@ -837,11 +985,6 @@
       S.models = m;
       S.model = m.default || (m.providers[0] && m.providers[0].models[0] && m.providers[0].models[0].id) || null;
     }).catch(function () {});
-
-    API.feed(null, 60).then(function (res) {
-      S.feed = res.items || [];
-      render();
-    }).catch(function () { render(); });
 
     loadGlossary();
     render();

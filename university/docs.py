@@ -250,6 +250,28 @@ def read_auto_markdown(item: sqlite3.Row, docs_dir: str) -> Optional[str]:
         return fh.read()
 
 
+def has_repo_readme(item: sqlite3.Row, docs_dir: str) -> bool:
+    """Cheap check: is this a repo whose stored README.md is on disk?
+
+    A repo's README.md is already Markdown, so it can be served as the reader's
+    markdown directly (no markitdown conversion). Only inspects ``doc_path``.
+    """
+    if item["kind"] != "repo":
+        return False
+    doc_rel = item["doc_path"]
+    if not doc_rel or os.path.basename(doc_rel) != "README.md":
+        return False
+    return os.path.isfile(os.path.join(docs_dir, doc_rel))
+
+
+def read_repo_readme(item: sqlite3.Row, docs_dir: str) -> Optional[str]:
+    """Return the stored README.md text for a repo item, or None when absent."""
+    if not has_repo_readme(item, docs_dir):
+        return None
+    with open(os.path.join(docs_dir, item["doc_path"]), "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
 def has_convertible_source(item: sqlite3.Row, docs_dir: str) -> bool:
     """Cheap check: is a real source doc already on disk that could convert?
 

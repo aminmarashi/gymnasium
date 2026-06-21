@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
 
-from . import ai, auth, docs, ingest, map_store, refresh
+from . import ai, auth, docs, feed, ingest, map_store, refresh
 from .db import bootstrap, connect, reindex_entry, utcnow
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
@@ -187,6 +187,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._api_models()
             if path == "/api/feed" and method == "GET":
                 return self._api_feed(query)
+            if path == "/api/feed/facets" and method == "GET":
+                return self._api_feed_facets(query)
             if path == "/api/summarize" and method == "POST":
                 return self._api_summarize()
             if path == "/api/ask" and method == "POST":
@@ -279,16 +281,11 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- feed / items -------------------------------------------------------
     def _item_dict(self, row: sqlite3.Row) -> dict:
-        try:
-            tags = json.loads(row["raw_json"]) if row["raw_json"] else {}
-        except (ValueError, TypeError):
-            tags = {}
-        tag_list = []
-        if isinstance(tags, dict):
-            tag_list = (tags.get("labs_matched") or tags.get("topics") or [])[:3]
-            if tags.get("language"):
-                tag_list = [tags["language"]] + list(tag_list)
-        return {
+        raw = feed.parse_raw(row)
+        tag_list = (raw.get("labs_matched") or raw.get("topics") or [])[:3]
+        if raw.get("language"):
+            tag_list = [raw["language"]] + list(tag_list)
+        out = {
             "id": row["id"],
             "kind": row["kind"],
             "title": row["title"],
@@ -305,20 +302,39 @@ class Handler(BaseHTTPRequestHandler):
             "markdown_source": row["markdown_source"],
             "tags": [t for t in tag_list if t][:3],
         }
+        # Fields the cards / filters need (authors, company, publication, language).
+        out.update(feed.item_facets(row, raw))
+        return out
 
     def _api_feed(self, query: Dict):
         kind = (query.get("kind", [None])[0])
         limit = int(query.get("limit", ["50"])[0] or 50)
+        q = (query.get("q", [""])[0] or "").strip()
+        sort = (query.get("sort", ["recency"])[0] or "recency")
+        filters = {
+            "author": query.get("author", [None])[0],
+            "company": query.get("company", [None])[0],
+            "publication": query.get("publication", [None])[0],
+            "language": query.get("language", [None])[0],
+        }
         sql = "SELECT * FROM corpus_item"
         params = []
         if kind in ("paper", "repo"):
             sql += " WHERE kind=?"
             params.append(kind)
-        sql += " ORDER BY signal DESC, COALESCE(published_at,'') DESC, id DESC LIMIT ?"
-        params.append(limit)
         with self.ctx.lock:
             rows = self.ctx.conn.execute(sql, params).fetchall()
-        self._send_json({"items": [self._item_dict(r) for r in rows]})
+        items = feed.select(rows, q=q, sort=sort, filters=filters, limit=limit)
+        self._send_json({"items": [self._item_dict(r) for r in items]})
+
+    def _api_feed_facets(self, query: Dict):
+        kind = (query.get("kind", ["paper"])[0]) or "paper"
+        if kind not in ("paper", "repo"):
+            return self._send_json({"error": "bad kind"}, status=400)
+        with self.ctx.lock:
+            rows = self.ctx.conn.execute(
+                "SELECT * FROM corpus_item WHERE kind=?", (kind,)).fetchall()
+        self._send_json(feed.facets(rows, kind))
 
     def _api_item(self, item_id: int):
         with self.ctx.lock:
@@ -335,7 +351,8 @@ class Handler(BaseHTTPRequestHandler):
             # document is on disk that could be converted on first read. No
             # conversion runs here — that happens lazily in the markdown GET.
             out["markdown_available"] = bool(row["markdown_path"]) or \
-                docs.has_convertible_source(row, self.ctx.docs_dir)
+                docs.has_convertible_source(row, self.ctx.docs_dir) or \
+                docs.has_repo_readme(row, self.ctx.docs_dir)
         self._send_json(out)
 
     def _api_item_document(self, item_id: int):
@@ -379,7 +396,16 @@ class Handler(BaseHTTPRequestHandler):
             # Precedence: a user upload always wins over the auto version.
             content = docs.read_markdown(row, self.ctx.docs_dir)
             source = "user" if content is not None else None
-            if content is None:
+            if content is None and row["kind"] == "repo":
+                # A repo's README.md is already Markdown — serve it directly.
+                # Ensure it's on disk first, then re-read the (possibly updated) row.
+                docs.ensure_document(row, self.ctx.docs_dir, self.ctx.conn)
+                row = self.ctx.conn.execute(
+                    "SELECT * FROM corpus_item WHERE id=?", (item_id,)).fetchone()
+                content = docs.read_repo_readme(row, self.ctx.docs_dir)
+                if content is not None:
+                    source = "readme"
+            if content is None and row["kind"] != "repo":
                 # Already-cached auto conversion, if any.
                 content = docs.read_auto_markdown(row, self.ctx.docs_dir)
                 if content is None:

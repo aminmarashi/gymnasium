@@ -650,12 +650,70 @@ def test_markdown_auto_then_user_override(live_server, monkeypatch):
         "GET", base + "/api/item/{}/markdown".format(pid), cookie=cookie)
     assert body.decode("utf-8") == "# Mine\n\nUploaded."  # user wins over auto
 
-    # An item with no convertible source falls back gracefully (404, no flag).
+    # A repo serves its stored README.md as markdown (already markdown, no
+    # markitdown conversion). The fake fetch returns README bytes on ingest.
     status, item, _ = _http("GET", base + "/api/item/{}".format(repo["id"]), cookie=cookie)
-    assert item["markdown_available"] is False
-    status, _, _ = _http_raw(
+    assert item["markdown_available"] is True
+    status, body, _ = _http_raw(
         "GET", base + "/api/item/{}/markdown".format(repo["id"]), cookie=cookie)
-    assert status == 404
+    assert status == 200 and body.decode("utf-8") == "FAKEDOC"
+
+
+def test_feed_facets_endpoint(live_server):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+
+    # Papers: the seeded sidecar has two papers in google + openai labs.
+    status, facets, _ = _http("GET", base + "/api/feed/facets?kind=paper", cookie=cookie)
+    assert status == 200
+    companies = {v["value"] for v in facets["companies"]["values"]}
+    assert {"google", "openai"}.issubset(companies)
+    assert "publications" in facets and "authors" in facets
+
+    # Repos: one seeded repo, owner acme, language Python.
+    status, facets, _ = _http("GET", base + "/api/feed/facets?kind=repo", cookie=cookie)
+    assert status == 200
+    assert {v["value"] for v in facets["companies"]["values"]} == {"acme"}
+    assert {v["value"] for v in facets["languages"]["values"]} == {"Python"}
+
+
+def test_feed_kind_search_and_sort(live_server):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+    # kind filter returns only that kind.
+    status, res, _ = _http("GET", base + "/api/feed?kind=repo", cookie=cookie)
+    assert status == 200 and all(i["kind"] == "repo" for i in res["items"])
+    # search narrows papers by title word.
+    status, res, _ = _http("GET", base + "/api/feed?kind=paper&q=mixture", cookie=cookie)
+    assert status == 200 and len(res["items"]) == 1
+    assert "Mixture" in res["items"][0]["title"]
+    # rating sort orders papers by signal descending.
+    status, res, _ = _http("GET", base + "/api/feed?kind=paper&sort=rating", cookie=cookie)
+    signals = [i["signal"] for i in res["items"]]
+    assert signals == sorted(signals, reverse=True)
+    # paper item dict surfaces authors / company / publication.
+    paper = res["items"][0]
+    assert "authors" in paper and "company" in paper and "publication" in paper
+
+
+def test_repo_readme_served_as_markdown(live_server):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+    status, feed, _ = _http("GET", base + "/api/feed?kind=repo", cookie=cookie)
+    repo_id = feed["items"][0]["id"]
+    # Opening the repo advertises markdown (its README), and the GET returns it.
+    status, item, _ = _http("GET", base + "/api/item/{}".format(repo_id), cookie=cookie)
+    assert status == 200 and item["markdown_available"] is True
+    status, body, ctype = _http_raw(
+        "GET", base + "/api/item/{}/markdown".format(repo_id), cookie=cookie)
+    assert status == 200 and body.decode("utf-8") == "FAKEDOC"  # fake _fetch README
+    assert "text/markdown" in ctype
 
 
 def test_auth_gate_and_full_flow(live_server):

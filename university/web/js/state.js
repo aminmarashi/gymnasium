@@ -14,10 +14,17 @@
 
   window.State = {
     user: null,
-    screen: 'feed',           // feed | reader | saved | map
+    screen: 'papers',         // papers | repos | reader | saved | map
     density: 'comfort',       // comfort | compact
     theme: defaultTheme(),
-    feed: [],
+    // Two feeds, each carrying its own search / sort / filters / facets.
+    feeds: {
+      paper: { items: [], q: '', sort: 'recency', facets: null,
+               filters: { author: '', company: '', publication: '' } },
+      repo: { items: [], q: '', sort: 'recency', facets: null,
+              filters: { company: '', language: '' } }
+    },
+    readerReturn: '#/papers', // hash to return to from the reader
     item: null,               // current reader item (full dict)
     summaryTerms: [],         // terms to underline in the reader
     glossary: {},             // term(lower) -> kb entry id, for underlining
