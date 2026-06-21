@@ -18,6 +18,7 @@ import re
 import sqlite3
 import urllib.request
 import urllib.error
+from urllib.parse import urljoin
 from typing import Optional
 
 from .db import utcnow
@@ -93,6 +94,83 @@ def _arxiv_html_url(item: sqlite3.Row, raw: dict) -> Optional[str]:
     """
     arxiv_id = _arxiv_id(item, raw)
     return "https://arxiv.org/html/{}".format(arxiv_id) if arxiv_id else None
+
+
+# Inline Markdown link/image: the [label], the target URL (optionally wrapped in
+# <…>), and an optional "title". We rewrite only the target so the label/title
+# survive untouched.
+_MD_URL_RE = re.compile(r'(!?\[[^\]]*\])\(\s*(<[^>]*>|[^()\s]+)((?:\s+"[^"]*")?)\s*\)')
+# Targets we must never rewrite: in-page anchors, protocol-relative, data URIs,
+# and anything already carrying a scheme.
+_ABSOLUTE_PREFIXES = ("http://", "https://", "data:", "mailto:", "ftp:", "javascript:")
+
+
+def _md_target(raw_target: str) -> str:
+    """Strip optional <…> angle brackets from a Markdown link target."""
+    if raw_target.startswith("<") and raw_target.endswith(">"):
+        return raw_target[1:-1]
+    return raw_target
+
+
+def _is_relative_target(target: str) -> bool:
+    """True when a Markdown target should be absolutized against the page base."""
+    if not target or target.startswith("#") or target.startswith("//"):
+        return False
+    return not target.lower().startswith(_ABSOLUTE_PREFIXES)
+
+
+def _source_url(item: sqlite3.Row, raw: dict) -> Optional[str]:
+    """The web URL the stored ``source.html`` was fetched from, for resolving its
+    relative asset links to absolute. Prefers the arXiv full-text HTML page (the
+    base its ``x1.png``/``figure/…`` images are relative to). None when unknown.
+    """
+    arxiv_html = _arxiv_html_url(item, raw)
+    if arxiv_html:
+        return arxiv_html
+    return raw.get("abs_url") or item["url"] or raw.get("source_url") or None
+
+
+def _absolutize_md_urls(text: str, base_url: str) -> str:
+    """Rewrite relative ``![alt](url)`` / ``[text](url)`` targets to absolute.
+
+    Resolves each relative target against ``base_url`` (urljoin) so converted
+    arXiv-HTML markdown keeps working images/links once rendered on another host.
+    Absolute, in-page, protocol-relative and data-URI targets are left intact.
+    """
+    if not base_url:
+        return text
+
+    def repl(match: "re.Match") -> str:
+        target = _md_target(match.group(2))
+        if not _is_relative_target(target):
+            return match.group(0)
+        return "{}({}{})".format(match.group(1), urljoin(base_url, target), match.group(3))
+
+    return _MD_URL_RE.sub(repl, text)
+
+
+def _has_relative_image(text: Optional[str]) -> bool:
+    """True when the markdown still has a relative ``![…](url)`` image target."""
+    for match in _MD_URL_RE.finditer(text or ""):
+        if match.group(1).startswith("!") and _is_relative_target(_md_target(match.group(2))):
+            return True
+    return False
+
+
+def auto_markdown_is_stale(item: sqlite3.Row, content: Optional[str]) -> bool:
+    """True when a cached conversion still holds relative image URLs we can fix.
+
+    Legacy ``article.auto.md`` files cached before URL absolutization keep
+    relative arXiv image targets that 404 in the reader. We only flag a rewrite
+    when a base URL is known, so absolutized conversions never re-trigger.
+    """
+    if item["kind"] == "repo" or not _has_relative_image(content):
+        return False
+    try:
+        raw = json.loads(item["raw_json"]) if item["raw_json"] else {}
+    except (ValueError, TypeError):
+        raw = {}
+    return _source_url(item, raw) is not None
 
 
 def _repo_dir_slug(item: sqlite3.Row, raw: dict) -> str:
@@ -261,6 +339,15 @@ def auto_markdown(item: sqlite3.Row, docs_dir: str, conn: sqlite3.Connection) ->
         return None
     if text is None:
         return None
+    # HTML sources keep image/link URLs relative to the page they were fetched
+    # from (e.g. arXiv ``x1.png``), which 404 once rendered on another host, so
+    # absolutize them against the known source URL before caching.
+    if base == "source.html":
+        try:
+            raw = json.loads(item["raw_json"]) if item["raw_json"] else {}
+        except (ValueError, TypeError):
+            raw = {}
+        text = _absolutize_md_urls(text, _source_url(item, raw) or "")
     rel_dir = os.path.dirname(doc_rel)
     abs_dir = os.path.join(docs_dir, rel_dir)
     try:

@@ -384,6 +384,62 @@ def test_store_paper_non_arxiv_keeps_existing_behavior(conn, tmp_path, monkeypat
     assert os.path.basename(doc_rel) == "source.html"
 
 
+def test_auto_markdown_absolutizes_relative_arxiv_images(
+        conn, tmp_path, monkeypatch):
+    # arXiv HTML figures are relative to arxiv.org/html/<id>/ (e.g. x1.png), so a
+    # converted ![](x1.png) would 404 once rendered on another host. The cached
+    # conversion must store the ABSOLUTE arxiv.org/html/<id>/x1.png instead.
+    monkeypatch.setattr(docs, "_fetch",
+                        lambda u: b"<html>clean</html>" if "arxiv.org/html/" in u else None)
+    _install_fake_markitdown(
+        monkeypatch,
+        text=("# Paper\n\n![Refer to caption](2606.19659v1/x1.png)\n\n"
+              "See [the abs](/abs/2606.19659v1) and [home](https://example.org/x)."))
+    raw = {"arxiv_id": "2606.19659"}
+    paper = _insert_paper(conn, "2606.19659", raw)
+    docs_dir = str(tmp_path / "documents")
+
+    out = docs.auto_markdown(paper, docs_dir, conn)
+
+    assert "![Refer to caption](https://arxiv.org/html/2606.19659v1/x1.png)" in out
+    # Relative inline links are absolutized too; absolute links are left intact.
+    assert "[the abs](https://arxiv.org/abs/2606.19659v1)" in out
+    assert "[home](https://example.org/x)" in out
+    # The absolute URLs are what got cached on disk, not the relative originals.
+    cached = docs.read_auto_markdown(paper, docs_dir)
+    assert "https://arxiv.org/html/2606.19659v1/x1.png" in cached
+    assert "(2606.19659v1/x1.png)" not in cached
+
+
+def test_absolutize_md_urls_skips_absolute_and_anchor_targets():
+    base = "https://arxiv.org/html/2606.19659"
+    src = ("![a](x1.png) [b](#sec) [c](https://h/x) ![d](data:image/png;base64,AAA) "
+           "[e](//cdn/x.js)")
+    out = docs._absolutize_md_urls(src, base)
+    assert "![a](https://arxiv.org/html/2606.19659v1/x1.png)" not in out  # base has no v1
+    assert "![a](https://arxiv.org/html/x1.png)" in out
+    assert "[b](#sec)" in out
+    assert "[c](https://h/x)" in out
+    assert "![d](data:image/png;base64,AAA)" in out
+    assert "[e](//cdn/x.js)" in out
+
+
+def test_auto_markdown_is_stale_flags_legacy_relative_images(conn, tmp_path):
+    # A cached conversion holding relative image URLs (and a known arXiv base) is
+    # stale and must regenerate; repos and absolute-only content are never stale.
+    raw = {"arxiv_id": "2606.19659"}
+    paper = _insert_paper(conn, "2606.19659", raw)
+    assert docs.auto_markdown_is_stale(paper, "![x](2606.19659v1/x1.png)") is True
+    assert docs.auto_markdown_is_stale(
+        paper, "![x](https://arxiv.org/html/2606.19659v1/x1.png)") is False
+    repo = conn.execute(
+        "INSERT INTO corpus_item (kind, external_id, title, ingested_at, raw_json) "
+        "VALUES ('repo', 'o__n', 'R', ?, '{}')", (db.utcnow(),))
+    conn.commit()
+    repo = conn.execute("SELECT * FROM corpus_item WHERE kind='repo' LIMIT 1").fetchone()
+    assert docs.auto_markdown_is_stale(repo, "![x](rel.png)") is False
+
+
 # --------------------------------------------------------------------------
 # feed ordering
 # --------------------------------------------------------------------------

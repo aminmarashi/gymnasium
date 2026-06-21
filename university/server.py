@@ -412,6 +412,12 @@ class Handler(BaseHTTPRequestHandler):
             if content is None and row["kind"] != "repo":
                 # Already-cached auto conversion, if any.
                 content = docs.read_auto_markdown(row, self.ctx.docs_dir)
+                if content is not None and docs.auto_markdown_is_stale(row, content):
+                    # Legacy cache with relative image URLs that 404 in the
+                    # reader — regenerate it once with absolute URLs.
+                    regenerated = docs.auto_markdown(row, self.ctx.docs_dir, self.ctx.conn)
+                    if regenerated is not None:
+                        content = regenerated
                 if content is None:
                     # Lazy first conversion: convert the stored original once.
                     content = docs.auto_markdown(row, self.ctx.docs_dir, self.ctx.conn)

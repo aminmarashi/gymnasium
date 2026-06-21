@@ -67,6 +67,9 @@
 .gym-read ::selection { background: var(--sun-100); color: var(--ink-900); }
 .gym-app.dark .gym-read ::selection { background: #6a4422; color: #fff; }
 
+/* Figures from converted articles fit the reading column instead of overflowing. */
+.gym-read img { max-width: 100%; height: auto; }
+
 /* Learnable terms — quietly underlined, tappable */
 .gym-term {
   cursor: pointer;
