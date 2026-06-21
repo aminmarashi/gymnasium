@@ -282,6 +282,58 @@ def test_auto_markdown_no_source_document_returns_none(conn, sample_reports, tmp
     assert docs.has_convertible_source(repo, docs_dir) is False
 
 
+def _insert_paper(conn, external_id, raw, url=None):
+    cur = conn.execute(
+        "INSERT INTO corpus_item (kind, external_id, title, url, abstract, "
+        "ingested_at, raw_json) VALUES ('paper', ?, ?, ?, ?, ?, ?)",
+        (external_id, "A Paper", url, "An abstract.", db.utcnow(), json.dumps(raw)))
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM corpus_item WHERE id=?", (cur.lastrowid,)).fetchone()
+
+
+@pytest.mark.parametrize("raw,url", [
+    # explicit arxiv_id, no pdf_url
+    ({"arxiv_id": "2601.12345", "pdf_url": None}, None),
+    # arxiv abs url only (version suffix preserved)
+    ({"pdf_url": None, "abs_url": "https://arxiv.org/abs/2601.12345"}, None),
+    # arxiv abs url carried on the item url
+    ({"pdf_url": None}, "https://arxiv.org/abs/2601.12345"),
+    # DataCite arXiv DOI (case-insensitive)
+    ({"pdf_url": None, "doi": "10.48550/arXiv.2601.12345"}, None),
+])
+def test_store_paper_fetches_derived_arxiv_pdf(conn, tmp_path, monkeypatch, raw, url):
+    requested = []
+
+    def fake_fetch(u):
+        requested.append(u)
+        return b"%PDF-1.4 fake bytes" if u == "https://arxiv.org/pdf/2601.12345" else None
+
+    monkeypatch.setattr(docs, "_fetch", fake_fetch)
+    paper = _insert_paper(conn, "2601.12345", raw, url=url)
+    docs_dir = str(tmp_path / "documents")
+
+    doc_rel = docs._store_paper(paper, raw, docs_dir)
+
+    assert "https://arxiv.org/pdf/2601.12345" in requested
+    assert os.path.basename(doc_rel) == "source.pdf"
+    assert os.path.isfile(os.path.join(docs_dir, doc_rel))
+
+
+def test_store_paper_non_arxiv_keeps_existing_behavior(conn, tmp_path, monkeypatch):
+    # No arxiv signal anywhere -> we never invent an arxiv.org/pdf URL.
+    requested = []
+    monkeypatch.setattr(docs, "_fetch", lambda u: requested.append(u) or b"<html/>")
+    raw = {"pdf_url": None, "abs_url": "https://example.org/papers/42"}
+    paper = _insert_paper(conn, "ex-42", raw, url="https://example.org/papers/42")
+    docs_dir = str(tmp_path / "documents")
+
+    doc_rel = docs._store_paper(paper, raw, docs_dir)
+
+    assert not any("arxiv.org/pdf" in u for u in requested)
+    assert os.path.basename(doc_rel) == "source.html"
+
+
 # --------------------------------------------------------------------------
 # feed ordering
 # --------------------------------------------------------------------------
@@ -495,7 +547,7 @@ def _http_raw(method, url, data=None, content_type=None, cookie=None):
         return e.code, None, None
 
 
-def test_markdown_attach_and_fetch(live_server):
+def test_markdown_attach_and_fetch(live_server, monkeypatch):
     base = live_server
     # gated without a cookie
     status, _, _ = _http_raw("GET", base + "/api/item/1/markdown")
@@ -508,17 +560,21 @@ def test_markdown_attach_and_fetch(live_server):
                              {"username": "maya", "password": "pw123"})
     cookie = setck.split(";")[0]
     status, feed, _ = _http("GET", base + "/api/feed", cookie=cookie)
-    item_id = feed["items"][0]["id"]
-    item2 = feed["items"][1]["id"]
+    paper_ids = [i["id"] for i in feed["items"] if i["kind"] == "paper"]
+    repo_id = next(i["id"] for i in feed["items"] if i["kind"] == "repo")
+    item_id = paper_ids[0]
 
-    # No markdown yet.
+    # No user markdown and auto-conversion forced unavailable -> 404. Pinning the
+    # auto path keeps this assertion deterministic whether or not markitdown is
+    # installed in the environment (it would otherwise auto-convert and return 200).
+    monkeypatch.setattr(docs, "auto_markdown", lambda *a, **k: None)
     status, item, _ = _http("GET", base + "/api/item/{}".format(item_id), cookie=cookie)
     assert status == 200 and item["has_markdown"] is False
     status, _, _ = _http_raw("GET", base + "/api/item/{}/markdown".format(item_id),
                              cookie=cookie)
     assert status == 404
 
-    # Raw text/markdown upload.
+    # Raw text/markdown upload: the uploaded user markdown is then fetched (200).
     md = "# Heading\n\nHello **world**.".encode("utf-8")
     status, _, _ = _http_raw("POST", base + "/api/item/{}/markdown".format(item_id),
                              data=md, content_type="text/markdown", cookie=cookie)
@@ -540,12 +596,22 @@ def test_markdown_attach_and_fetch(live_server):
         "--{b}--\r\n"
     ).format(b=boundary).encode("utf-8")
     status, _, _ = _http_raw(
-        "POST", base + "/api/item/{}/markdown".format(item2), data=multipart,
+        "POST", base + "/api/item/{}/markdown".format(repo_id), data=multipart,
         content_type="multipart/form-data; boundary={}".format(boundary), cookie=cookie)
     assert status == 200
     status, body, _ = _http_raw(
-        "GET", base + "/api/item/{}/markdown".format(item2), cookie=cookie)
+        "GET", base + "/api/item/{}/markdown".format(repo_id), cookie=cookie)
     assert status == 200 and body.decode("utf-8") == "## Multipart"
+
+    # When auto-conversion IS available, an item with no user markdown serves the
+    # converted text and reports markdown_source=auto.
+    auto_id = paper_ids[1]
+    monkeypatch.setattr(docs, "auto_markdown", lambda *a, **k: "# Auto\n\nConverted body.")
+    status, body, _ = _http_raw(
+        "GET", base + "/api/item/{}/markdown".format(auto_id), cookie=cookie)
+    assert status == 200 and body.decode("utf-8") == "# Auto\n\nConverted body."
+    status, item, _ = _http("GET", base + "/api/item/{}".format(auto_id), cookie=cookie)
+    assert item["markdown_source"] == "auto"
 
 
 def test_markdown_auto_then_user_override(live_server, monkeypatch):
