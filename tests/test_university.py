@@ -320,6 +320,56 @@ def test_store_paper_fetches_derived_arxiv_pdf(conn, tmp_path, monkeypatch, raw,
     assert os.path.isfile(os.path.join(docs_dir, doc_rel))
 
 
+def test_store_paper_prefers_arxiv_html(conn, tmp_path, monkeypatch):
+    # arXiv items must fetch the clean full-text HTML (arxiv.org/html/<id>) FIRST
+    # and use it as the source, never falling back to the watermarked PDF.
+    requested = []
+
+    def fake_fetch(u):
+        requested.append(u)
+        return b"<html><body>Clean text</body></html>" if "arxiv.org/html/" in u else None
+
+    monkeypatch.setattr(docs, "_fetch", fake_fetch)
+    raw = {"arxiv_id": "2606.19659", "pdf_url": "https://arxiv.org/pdf/2606.19659"}
+    paper = _insert_paper(conn, "2606.19659", raw)
+    docs_dir = str(tmp_path / "documents")
+
+    doc_rel = docs._store_paper(paper, raw, docs_dir)
+
+    assert requested[0] == "https://arxiv.org/html/2606.19659"  # HTML requested first
+    assert os.path.basename(doc_rel) == "source.html"
+    assert os.path.isfile(os.path.join(docs_dir, doc_rel))
+    assert not any("arxiv.org/pdf" in u for u in requested)  # never used the PDF
+
+
+def test_ensure_document_upgrades_pdf_to_html_and_drops_stale_conversion(
+        conn, tmp_path, monkeypatch):
+    # An already-opened arXiv item stuck on the watermarked PDF self-heals to the
+    # clean HTML when reopened, and the stale article.auto.md is dropped so the
+    # next read regenerates it from the new source.
+    raw = {"arxiv_id": "2606.19659", "pdf_url": "https://arxiv.org/pdf/2606.19659"}
+    paper = _insert_paper(conn, "2606.19659", raw)
+    docs_dir = str(tmp_path / "documents")
+
+    # First open: only the PDF is reachable -> source.pdf, plus a cached auto.md.
+    monkeypatch.setattr(docs, "_fetch",
+                        lambda u: b"%PDF-1.4 fake" if "arxiv.org/pdf/" in u else None)
+    rel = docs.ensure_document(paper, docs_dir, conn)
+    assert os.path.basename(rel) == "source.pdf"
+    auto_path = os.path.join(docs_dir, os.path.dirname(rel), "article.auto.md")
+    os.makedirs(os.path.dirname(auto_path), exist_ok=True)
+    with open(auto_path, "w", encoding="utf-8") as fh:
+        fh.write("STALE pdf-derived conversion")
+
+    # Reopen: HTML is now reachable -> upgrades to source.html, stale auto dropped.
+    monkeypatch.setattr(docs, "_fetch",
+                        lambda u: b"<html>clean</html>" if "arxiv.org/html/" in u else None)
+    paper = conn.execute("SELECT * FROM corpus_item WHERE id=?", (paper["id"],)).fetchone()
+    rel2 = docs.ensure_document(paper, docs_dir, conn)
+    assert os.path.basename(rel2) == "source.html"
+    assert not os.path.isfile(auto_path)  # stale conversion removed -> will regenerate
+
+
 def test_store_paper_non_arxiv_keeps_existing_behavior(conn, tmp_path, monkeypatch):
     # No arxiv signal anywhere -> we never invent an arxiv.org/pdf URL.
     requested = []

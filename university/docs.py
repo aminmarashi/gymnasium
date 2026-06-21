@@ -55,12 +55,11 @@ _ARXIV_ABS_RE = re.compile(r"arxiv\.org/abs/([^\s?#]+)", re.IGNORECASE)
 _ARXIV_DOI_RE = re.compile(r"10\.48550/arxiv\.([^\s?#/]+)", re.IGNORECASE)
 
 
-def _arxiv_pdf_url(item: sqlite3.Row, raw: dict) -> Optional[str]:
-    """Return the canonical arXiv PDF URL for an arXiv paper, else None.
+def _arxiv_id(item: sqlite3.Row, raw: dict) -> Optional[str]:
+    """Derive the arXiv id for an item, or None when it is not an arXiv paper.
 
-    Derives the arXiv id from an explicit ``arxiv_id``, an ``arxiv.org/abs/<id>``
-    URL (version suffix preserved), or a ``10.48550/arXiv.<id>`` DOI, and builds
-    ``https://arxiv.org/pdf/<id>``. Returns None when the item is not arXiv.
+    Reads an explicit ``arxiv_id``, an ``arxiv.org/abs/<id>`` URL (version suffix
+    preserved), or a ``10.48550/arXiv.<id>`` DOI.
     """
     arxiv_id = (raw.get("arxiv_id") or "").strip()
     if not arxiv_id:
@@ -73,9 +72,27 @@ def _arxiv_pdf_url(item: sqlite3.Row, raw: dict) -> Optional[str]:
             if match:
                 arxiv_id = match.group(1).strip().rstrip("/")
                 break
-    if not arxiv_id:
-        return None
-    return "https://arxiv.org/pdf/{}".format(arxiv_id)
+    return arxiv_id or None
+
+
+def _arxiv_pdf_url(item: sqlite3.Row, raw: dict) -> Optional[str]:
+    """Return the canonical arXiv PDF URL for an arXiv paper, else None.
+
+    Builds ``https://arxiv.org/pdf/<id>``. Returns None when not arXiv.
+    """
+    arxiv_id = _arxiv_id(item, raw)
+    return "https://arxiv.org/pdf/{}".format(arxiv_id) if arxiv_id else None
+
+
+def _arxiv_html_url(item: sqlite3.Row, raw: dict) -> Optional[str]:
+    """Return the arXiv full-text HTML URL for an arXiv paper, else None.
+
+    ``https://arxiv.org/html/<id>`` is the clean rendered full text — no vertical
+    margin watermark and no lost spaces — so markitdown converts it far more
+    cleanly than the PDF. Returns None when the item is not arXiv.
+    """
+    arxiv_id = _arxiv_id(item, raw)
+    return "https://arxiv.org/html/{}".format(arxiv_id) if arxiv_id else None
 
 
 def _repo_dir_slug(item: sqlite3.Row, raw: dict) -> str:
@@ -99,24 +116,40 @@ def _store_paper(item: sqlite3.Row, raw: dict, docs_dir: str) -> Optional[str]:
     with open(os.path.join(abs_dir, "abstract.txt"), "w", encoding="utf-8") as fh:
         fh.write(abstract)
 
-    # original document: prefer the PDF, fall back to the abstract HTML page.
+    # original document: for arXiv papers prefer the clean full-text HTML
+    # (arxiv.org/html/<id> — no vertical watermark, no lost spaces) which
+    # markitdown converts cleanly; fall back to the PDF, then the abstract page.
     # For arXiv papers the tracker entry often lacks pdf_url, so derive the
     # canonical arxiv.org/pdf/<id> URL and try it before the html fallback.
     html_url = raw.get("abs_url") or item["url"] or raw.get("source_url")
-    pdf_urls = []
-    if raw.get("pdf_url"):
-        pdf_urls.append(raw["pdf_url"])
-    arxiv_pdf = _arxiv_pdf_url(item, raw)
-    if arxiv_pdf and arxiv_pdf not in pdf_urls:
-        pdf_urls.append(arxiv_pdf)
     doc_rel = None
-    for pdf_url in pdf_urls:
-        data = _fetch(pdf_url)
+    arxiv_html = _arxiv_html_url(item, raw)
+    if arxiv_html:
+        data = _fetch(arxiv_html)
         if data:
-            with open(os.path.join(abs_dir, "source.pdf"), "wb") as fh:
+            with open(os.path.join(abs_dir, "source.html"), "wb") as fh:
                 fh.write(data)
+            doc_rel = os.path.join(rel_dir, "source.html")
+    if doc_rel is None:
+        existing_pdf = os.path.join(abs_dir, "source.pdf")
+        if os.path.isfile(existing_pdf):
+            # A PDF is already on disk (e.g. arXiv HTML 404'd this open) — reuse
+            # it rather than re-downloading the whole file on every open.
             doc_rel = os.path.join(rel_dir, "source.pdf")
-            break
+        else:
+            pdf_urls = []
+            if raw.get("pdf_url"):
+                pdf_urls.append(raw["pdf_url"])
+            arxiv_pdf = _arxiv_pdf_url(item, raw)
+            if arxiv_pdf and arxiv_pdf not in pdf_urls:
+                pdf_urls.append(arxiv_pdf)
+            for pdf_url in pdf_urls:
+                data = _fetch(pdf_url)
+                if data:
+                    with open(existing_pdf, "wb") as fh:
+                        fh.write(data)
+                    doc_rel = os.path.join(rel_dir, "source.pdf")
+                    break
     if doc_rel is None and html_url:
         data = _fetch(html_url)
         if data:
@@ -300,12 +333,15 @@ def ensure_document(item: sqlite3.Row, docs_dir: str, conn: sqlite3.Connection) 
         raw = {}
 
     if have_existing:
-        # Idempotent, except: an abstract-only arXiv item may now be upgradable
-        # to the real PDF, so fall through and re-attempt the fetch in that case.
-        upgradable = (
-            os.path.basename(existing) == "abstract.txt"
-            and item["kind"] != "repo"
-            and _arxiv_pdf_url(item, raw) is not None
+        # Idempotent, except two arXiv upgrades, where we fall through and
+        # re-store: an abstract-only item that can now reach the real PDF, and a
+        # PDF-derived item that can be replaced by the clean full-text HTML
+        # (which drops the watermark/spacing damage that breaks rendering).
+        basename = os.path.basename(existing)
+        upgradable = item["kind"] != "repo" and (
+            (basename == "abstract.txt" and _arxiv_pdf_url(item, raw) is not None)
+            or (basename in ("abstract.txt", "source.pdf")
+                and _arxiv_html_url(item, raw) is not None)
         )
         if not upgradable:
             return existing
@@ -320,6 +356,16 @@ def ensure_document(item: sqlite3.Row, docs_dir: str, conn: sqlite3.Connection) 
         return existing if have_existing else None
 
     if doc_rel:
+        # When the source document changed (e.g. an arXiv item upgraded from the
+        # watermarked PDF to the clean HTML), drop the stale cached conversion so
+        # the next markdown read regenerates article.auto.md from the new source.
+        if have_existing and os.path.basename(doc_rel) != os.path.basename(existing):
+            stale = os.path.join(docs_dir, os.path.dirname(doc_rel), "article.auto.md")
+            try:
+                if os.path.isfile(stale):
+                    os.remove(stale)
+            except OSError:
+                pass
         conn.execute(
             "UPDATE corpus_item SET doc_path=?, doc_fetched_at=? WHERE id=?",
             (doc_rel, utcnow(), item["id"]),
