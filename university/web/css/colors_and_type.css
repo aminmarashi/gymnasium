@@ -1,0 +1,150 @@
+/* ============================================================
+   mijnspel Design System — EDU variant
+   For Dutch secondary school (klas 1–3, ages 12–15).
+   Light-first. Friendly type. Step-based, not phase-based.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* ---- Core surfaces — warm paper to dark ink ---- */
+  --paper-50:  #fdfaf3;   /* page background */
+  --paper-100: #ffffff;   /* primary surface */
+  --paper-200: #f6f1e6;   /* sunken / muted band */
+  --paper-300: #ece5d4;   /* hairline & rules */
+  --paper-400: #d9d1bd;   /* stronger border */
+
+  --ink-900:   #1f1b14;   /* primary text — warm near-black */
+  --ink-700:   #3a3328;   /* secondary text */
+  --ink-500:   #6a6253;   /* tertiary text */
+  --ink-400:   #94897a;   /* muted / disabled */
+  --ink-300:   #b9b0a0;   /* placeholder */
+
+  /* ---- Ignition orange (kept as brand link) — used softer ---- */
+  --spark-700: #c84a13;
+  --spark-600: #e85a18;
+  --spark-500: #ff6a26;   /* primary accent */
+  --spark-400: #ff8b54;
+  --spark-200: #ffd6bf;
+  --spark-100: #fff0e6;   /* tinted surface */
+
+  /* ---- Friend palette — sit beside spark ---- */
+  --grass-600: #1f8a5b;   /* success / done / play */
+  --grass-500: #2eb574;
+  --grass-100: #d9f3e4;
+
+  --sky-600:   #2b5fbf;   /* info / learn / current step */
+  --sky-500:   #4485f3;
+  --sky-100:   #dbe9fb;
+
+  --sun-600:   #c98a08;   /* highlight / waiting */
+  --sun-500:   #f5b820;
+  --sun-100:   #fdebbf;
+
+  --berry-600: #7a4dcc;   /* achievement / published */
+  --berry-500: #9b75e0;
+  --berry-100: #ebe2fa;
+
+  --rose-600:  #c2384e;   /* attention / fix */
+  --rose-100:  #fbe0e4;
+
+  /* ---- Step semantics (replaces phase chips) ---- */
+  --step-locked:   var(--ink-400);  /* nog niet */
+  --step-current:  var(--sky-500);  /* nu */
+  --step-running:  var(--spark-500);/* bezig */
+  --step-done:     var(--grass-500);/* klaar */
+  --step-blocked:  var(--rose-600); /* hulp nodig */
+
+  /* ---- Semantic tokens ---- */
+  --bg-page:     var(--paper-50);
+  --bg-surface:  var(--paper-100);
+  --bg-sunken:   var(--paper-200);
+  --bg-tinted:   var(--spark-100);
+  --bg-input:    var(--paper-100);
+
+  --fg-1:        var(--ink-900);
+  --fg-2:        var(--ink-700);
+  --fg-3:        var(--ink-500);
+  --fg-muted:    var(--ink-400);
+  --fg-accent:   var(--spark-600);
+  --fg-link:     var(--sky-600);
+  --fg-inverse:  #ffffff;
+
+  --border-hair:    var(--paper-300);
+  --border-default: var(--paper-400);
+  --border-strong:  var(--ink-400);
+  --border-accent:  var(--spark-500);
+  --border-focus:   var(--sky-500);
+
+  /* ---- Typography — friendly, generous ---- */
+  --font-display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+  --font-sans:    'Nunito', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, Menlo, monospace; /* rare */
+
+  /* Larger body, generous line-height, less density */
+  --t-display: 700 56px/1.05 var(--font-display);
+  --t-h1:      700 36px/1.15 var(--font-display);
+  --t-h2:      700 26px/1.25 var(--font-sans);
+  --t-h3:      700 18px/1.3  var(--font-sans);
+  --t-body:    500 16px/1.55 var(--font-sans);
+  --t-body-lg: 500 18px/1.5  var(--font-sans);
+  --t-body-sm: 500 14px/1.5  var(--font-sans);
+  --t-button:  700 15px/1    var(--font-sans);
+  --t-label:   700 12px/1.2  var(--font-sans);   /* sentence case, not UPPER */
+  --t-caption: 600 12px/1.4  var(--font-sans);
+  --t-mono:    500 14px/1.5  var(--font-mono);   /* rare — only appId etc */
+
+  /* ---- Spacing (4px base, generous) ---- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+  --s-9: 96px;
+
+  /* Minimum touch target — 44px */
+  --hit-min: 44px;
+
+  /* ---- Radii — softer, more friendly ---- */
+  --r-1: 6px;
+  --r-2: 10px;
+  --r-3: 16px;
+  --r-card: 14px;
+  --r-pill: 999px;
+
+  /* ---- Elevation — soft, warm ---- */
+  --shadow-1: 0 1px 2px rgba(36, 28, 16, 0.04), 0 1px 1px rgba(36, 28, 16, 0.06);
+  --shadow-2: 0 2px 4px rgba(36, 28, 16, 0.06), 0 8px 16px rgba(36, 28, 16, 0.08);
+  --shadow-3: 0 4px 8px rgba(36, 28, 16, 0.08), 0 20px 40px rgba(36, 28, 16, 0.12);
+  --shadow-focus: 0 0 0 3px rgba(68, 133, 243, 0.25);
+  --shadow-spark:  0 0 0 3px rgba(255, 106, 38, 0.22);
+
+  /* ---- Motion — slightly slower for clarity ---- */
+  --ease-out:  cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-snap: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-1: 160ms;
+  --dur-2: 260ms;
+  --dur-3: 400ms;
+}
+
+/* ---- Element defaults ---- */
+html, body { background: var(--bg-page); color: var(--fg-1); font: var(--t-body); }
+
+h1 { font: var(--t-display); letter-spacing: -0.02em; color: var(--fg-1); margin: 0; }
+h2 { font: var(--t-h1); letter-spacing: -0.01em; color: var(--fg-1); margin: 0; }
+h3 { font: var(--t-h2); color: var(--fg-1); margin: 0; }
+h4 { font: var(--t-h3); color: var(--fg-1); margin: 0; }
+p  { font: var(--t-body); color: var(--fg-2); margin: 0; }
+
+code { font: var(--t-mono); color: var(--spark-700); background: var(--spark-100); padding: 1px 6px; border-radius: var(--r-1); }
+
+a { color: var(--fg-link); text-decoration: none; border-bottom: 1.5px solid transparent; }
+a:hover { border-bottom-color: var(--fg-link); }
+
+::selection { background: var(--sun-100); color: var(--ink-900); }
+
+/* Focus ring — friendly, visible */
+:focus-visible { outline: none; box-shadow: var(--shadow-focus); border-radius: var(--r-1); }

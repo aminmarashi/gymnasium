@@ -1,0 +1,151 @@
+/* ============================================================
+   Gymnasium — app token layer
+   Sits on top of mijnspel colors_and_type.css.
+   Light is inherited from :root. Dark overrides only the
+   primitive ramps (paper-*, ink-*, friend -100 tints) so every
+   semantic token (--bg-surface, --fg-1, --border-hair, …) and
+   every inline style that reads var(--…) follows automatically.
+   ============================================================ */
+
+.gym-app {
+  font-family: var(--font-sans);
+  color: var(--fg-1);
+  background: var(--bg-page);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.gym-app.dark {
+  --paper-50:  #17130d;   /* page */
+  --paper-100: #201b13;   /* surface */
+  --paper-200: #2a241b;   /* sunken */
+  --paper-300: #3a3327;   /* hairline */
+  --paper-400: #4e4636;   /* border */
+
+  --ink-900: #f6f0e2;
+  --ink-700: #ddd4c2;
+  --ink-500: #a99f8b;
+  --ink-400: #857b69;
+  --ink-300: #655d4e;
+
+  --spark-100: #311e11;
+  --spark-200: #5c3a20;
+
+  --grass-100: #163021;
+  --sky-100:   #1a2a41;
+  --sun-100:   #352a10;
+  --berry-100: #271f3b;
+  --rose-100:  #3a1c22;
+
+  --shadow-1: 0 1px 2px rgba(0,0,0,.45);
+  --shadow-2: 0 6px 20px rgba(0,0,0,.5);
+  --shadow-3: 0 18px 44px rgba(0,0,0,.62);
+
+  /* Re-declare the semantic aliases here. They were already computed at :root
+     with the light primitives, so they must be re-resolved at this scope or
+     the dark primitives above never reach them. */
+  --bg-page: var(--paper-50);
+  --bg-surface: var(--paper-100);
+  --bg-sunken: var(--paper-200);
+  --bg-tinted: var(--spark-100);
+  --bg-input: var(--paper-100);
+  --fg-1: var(--ink-900);
+  --fg-2: var(--ink-700);
+  --fg-3: var(--ink-500);
+  --fg-muted: var(--ink-400);
+  --fg-accent: var(--spark-400);
+  --fg-link: var(--sky-500);
+  --border-hair: var(--paper-300);
+  --border-default: var(--paper-400);
+  --border-strong: var(--ink-400);
+  --border-accent: var(--spark-500);
+  --border-focus: var(--sky-500);
+}
+
+/* Reading-column text selection — the hero affordance.
+   Warm sun highlight in light, warm amber in dark. */
+.gym-read ::selection { background: var(--sun-100); color: var(--ink-900); }
+.gym-app.dark .gym-read ::selection { background: #6a4422; color: #fff; }
+
+/* Learnable terms — quietly underlined, tappable */
+.gym-term {
+  cursor: pointer;
+  border-bottom: 2px solid var(--spark-200);
+  border-radius: 2px;
+  padding: 0 1px 1px;
+  transition: background .15s var(--ease-out), border-color .15s var(--ease-out);
+}
+.gym-term:hover { background: var(--spark-100); border-bottom-color: var(--spark-500); }
+
+/* Tidy scrollbars inside the frames */
+.gym-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.gym-scroll::-webkit-scrollbar-thumb { background: var(--paper-400); border-radius: 4px; }
+.gym-scroll::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- Conversation panel: bottom sheet (phone) / side panel (desktop) ---- */
+@keyframes gymUp   { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes gymIn   { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes gymFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes gymPop  { from { opacity: 0; transform: translate(-50%, calc(-100% - 2px)) scale(.96); }
+                     to   { opacity: 1; transform: translate(-50%, calc(-100% - 8px)) scale(1); } }
+
+.gym-panel {
+  position: absolute;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-3);
+  display: flex;
+  flex-direction: column;
+  z-index: 40;
+  min-height: 0;
+}
+.gym-panel.sheet {
+  left: 0; right: 0; bottom: 0;
+  max-height: 84%;
+  border-radius: 18px 18px 0 0;
+  border-top: 1px solid var(--border-hair);
+  animation: gymUp .26s var(--ease-out);
+}
+.gym-panel.side {
+  top: 0; right: 0; bottom: 0;
+  width: 392px;
+  border-left: 1px solid var(--border-hair);
+  animation: gymIn .26s var(--ease-out);
+}
+.gym-scrim {
+  position: absolute; inset: 0;
+  background: rgba(20,15,8,.34);
+  z-index: 35;
+  animation: gymFade .2s var(--ease-out);
+}
+.gym-toolbar { animation: gymPop .16s var(--ease-out); }
+
+/* ---- Interactive states (can't be expressed inline) ---- */
+.gym-card { transition: box-shadow .16s var(--ease-out), transform .16s var(--ease-out), border-color .16s var(--ease-out); }
+.gym-card:hover { box-shadow: var(--shadow-2); transform: translateY(-1px); border-color: var(--border-default); }
+.gym-press { transition: filter .14s var(--ease-out), background .14s var(--ease-out); }
+.gym-press:hover { filter: brightness(.97); }
+
+.gym-nav { transition: background .14s var(--ease-out), color .14s var(--ease-out); }
+.gym-nav:hover { background: var(--paper-200); }
+.gym-nav.on { background: var(--spark-100); color: var(--spark-700); }
+
+.gym-seg { cursor: pointer; border: 1.5px solid var(--border-default); background: var(--bg-surface); color: var(--fg-2); border-radius: 999px; padding: 7px 14px; font: 600 13px/1 var(--font-sans); min-height: 34px; transition: all .14s var(--ease-out); }
+.gym-seg:hover { background: var(--paper-200); }
+.gym-seg.on { background: var(--sky-100); border-color: var(--sky-500); color: var(--sky-600); }
+.gym-app.dark .gym-seg.on { color: var(--ink-900); }
+
+.gym-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: none; background: none; color: var(--fg-3); cursor: pointer; font: 600 11px/1.1 var(--font-sans); min-height: 56px; padding: 6px 0; transition: color .14s var(--ease-out); }
+.gym-tab.on { color: var(--spark-600); }
+
+.gym-term-input { width: 100%; border: 1.5px solid var(--border-default); background: var(--bg-input); color: var(--fg-1); border-radius: 10px; padding: 11px 13px; font: 500 15px/1.4 var(--font-sans); outline: none; }
+.gym-term-input:focus { border-color: var(--border-focus); box-shadow: var(--shadow-focus); }
+.gym-term-input::placeholder { color: var(--ink-300); }
+
+/* ---- Responsive note ----------------------------------------
+   This prototype switches phone↔desktop via an explicit `layout`
+   prop so both can be shown side-by-side. In production the same
+   tokens drive a single fluid layout at these breakpoints:
+     • ≤560px   phone   — single column, bottom tab bar, sheet panel
+     • 561–900  tablet  — single column, wider reading measure
+     • ≥901px   desktop — left rail + right side panel
+   ------------------------------------------------------------ */

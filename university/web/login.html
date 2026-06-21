@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gymnasium</title>
+<link rel="stylesheet" href="/css/colors_and_type.css">
+<link rel="stylesheet" href="/css/gym.css">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="gym-app login-page" id="loginApp">
+  <main class="login-card">
+    <div class="login-lockup">Gymnasium<span class="login-dot">.</span></div>
+    <p class="login-tag">Your personal frontier university. Sign in to read.</p>
+    <form id="loginForm" class="login-form" autocomplete="off">
+      <label class="login-label" for="username">Username</label>
+      <input class="gym-term-input" id="username" name="username" pattern="[A-Za-z0-9]+"
+             inputmode="text" autocapitalize="none" autocomplete="username"
+             placeholder="your handle" required>
+      <label class="login-label" for="password">Password</label>
+      <input class="gym-term-input" id="password" name="password" type="password"
+             pattern="[A-Za-z0-9]+" autocomplete="current-password"
+             placeholder="••••••••" required>
+      <div class="login-error" id="loginError" hidden></div>
+      <button class="login-submit" type="submit">Enter Gymnasium</button>
+    </form>
+    <p class="login-foot">Letters and numbers only.</p>
+  </main>
+</div>
+<script>
+(function () {
+  var form = document.getElementById('loginForm');
+  var err = document.getElementById('loginError');
+  function showErr(msg) { err.textContent = msg; err.hidden = false; }
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    err.hidden = true;
+    var u = document.getElementById('username').value.trim();
+    var p = document.getElementById('password').value;
+    if (!/^[A-Za-z0-9]+$/.test(u) || !/^[A-Za-z0-9]+$/.test(p)) {
+      showErr('Username and password must be letters and numbers only.');
+      return;
+    }
+    fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p })
+    }).then(function (r) {
+      if (r.ok) { window.location.href = '/'; return; }
+      return r.json().then(function (d) { showErr((d && d.error) || 'Sign in failed.'); });
+    }).catch(function () { showErr('Could not reach the server.'); });
+  });
+})();
+</script>
+</body>
+</html>

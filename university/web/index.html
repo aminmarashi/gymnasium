@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gymnasium</title>
+<link rel="stylesheet" href="/css/colors_and_type.css">
+<link rel="stylesheet" href="/css/gym.css">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="gym-app" id="app">
+
+  <!-- Desktop left rail -->
+  <aside class="rail" id="rail">
+    <div class="rail-lockup">Gymnasium<span style="color:var(--spark-500)">.</span></div>
+    <button class="gym-nav rail-nav" data-screen="feed">
+      <svg viewBox="0 0 24 24" class="ico"><path d="M4 5h12v14H6a2 2 0 0 1-2-2V5z"></path><path d="M16 8h3a1 1 0 0 1 1 1v8a2 2 0 0 1-2 2"></path><path d="M7 9h6M7 13h6M7 17h4"></path></svg>Frontier feed
+    </button>
+    <button class="gym-nav rail-nav" data-screen="saved">
+      <svg viewBox="0 0 24 24" class="ico"><path d="M6 4h12v16l-6-4-6 4V4z"></path></svg>Knowledge base
+    </button>
+    <button class="gym-nav rail-nav" data-screen="map">
+      <svg viewBox="0 0 24 24" class="ico"><circle cx="6" cy="6" r="2.4"></circle><circle cx="18" cy="9" r="2.4"></circle><circle cx="9" cy="18" r="2.4"></circle><path d="M8 7l8 1.4M8.6 16 16 11"></path></svg>Knowledge map
+    </button>
+    <button class="gym-nav rail-nav" data-screen="refresh-trigger" id="railRefresh">
+      <svg viewBox="0 0 24 24" class="ico"><path d="M21 12a9 9 0 1 1-2.6-6.4"></path><path d="M21 4v5h-5"></path></svg>Refresh feed
+    </button>
+    <div class="rail-spacer"></div>
+    <button class="gym-nav rail-nav" id="railTheme" data-action="theme">
+      <svg viewBox="0 0 24 24" class="ico" id="railThemeIcon"></svg><span id="railThemeLabel">Dark</span> theme
+    </button>
+    <div class="rail-user">
+      <span class="rail-avatar" id="railAvatar">·</span>
+      <div class="rail-user-meta">
+        <div class="rail-user-name" id="railUserName">…</div>
+        <div class="rail-user-sub">Studying solo</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main column -->
+  <div class="col" id="col">
+    <header class="topbar">
+      <span class="topbar-lockup" id="topbarLockup">Gymnasium<span style="color:var(--spark-500)">.</span></span>
+      <span class="topbar-section" id="topbarSection"></span>
+      <button class="gym-press topbar-theme" id="topbarTheme" aria-label="Toggle theme">
+        <svg viewBox="0 0 24 24" class="ico" id="topbarThemeIcon"></svg>
+      </button>
+    </header>
+
+    <main class="gym-scroll scroll" id="scroll">
+      <div class="content" id="screen"><!-- rendered by app.js --></div>
+    </main>
+
+    <!-- Phone bottom tabs -->
+    <nav class="tabbar" id="tabbar">
+      <button class="gym-tab" data-screen="feed"><svg viewBox="0 0 24 24" class="ico"><path d="M4 5h12v14H6a2 2 0 0 1-2-2V5z"></path><path d="M16 8h3a1 1 0 0 1 1 1v8a2 2 0 0 1-2 2"></path><path d="M7 9h6M7 13h6"></path></svg>Feed</button>
+      <button class="gym-tab" data-screen="saved"><svg viewBox="0 0 24 24" class="ico"><path d="M6 4h12v16l-6-4-6 4V4z"></path></svg>Saved</button>
+      <button class="gym-tab" data-screen="map"><svg viewBox="0 0 24 24" class="ico"><circle cx="6" cy="6" r="2.2"></circle><circle cx="18" cy="9" r="2.2"></circle><circle cx="9" cy="18" r="2.2"></circle><path d="M8 7l8 1.4M8.6 16 16 11"></path></svg>Map</button>
+    </nav>
+
+    <!-- Floating selection toolbar -->
+    <div class="gym-toolbar toolbar" id="toolbar" hidden>
+      <button data-mode="explain">Explain</button>
+      <button data-mode="summarize">Summarize</button>
+      <button data-mode="ask" class="primary">Ask</button>
+    </div>
+
+    <!-- Scrim + conversation panel -->
+    <div class="gym-scrim scrim" id="scrim" hidden></div>
+    <div class="gym-panel panel" id="panel" hidden></div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast" hidden></div>
+  </div>
+</div>
+
+<script src="/js/api.js"></script>
+<script src="/js/state.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

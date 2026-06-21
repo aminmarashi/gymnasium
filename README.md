@@ -196,6 +196,45 @@ Run `labrepos --help` for the full list. The watchlist is a configurable starter
 set meant to be edited. The offline test suite (`pytest`) uses saved GitHub
 fixtures — no live network.
 
+## university — the personal AI university (web app)
+
+`university` is the reading-and-studying front end that sits on top of the two
+trackers. It is a stdlib-only Python + SQLite backend (no new third-party
+dependencies) plus a mobile-first web UI, served together by one command:
+
+```bash
+pip install -e .
+gymnasium adduser maya hunter2          # plaintext, alphanumeric-only
+gymnasium --ingest-on-start             # serves http://127.0.0.1:8077
+```
+
+What it does:
+
+- **Auth gate** — a plaintext, alphanumeric login (single-tenant, personal).
+  Every `/api/*` route except login requires a 30-day cookie token.
+- **Corpus** — ingests the `labpapers` / `labrepos` JSON report sidecars from
+  `reports/` into a SQLite `corpus_item` table (deduped, impact normalized to
+  0–100). A UI button kicks off a background **refresh** that re-runs the
+  trackers in-process and re-ingests.
+- **Document store** — opening an item (or saving a fact) fetches the original
+  paper/repo document once and keeps it on disk under `data/documents/` so a
+  saved fact always points at a concrete local file.
+- **AI via opencode only** — all AI goes through the `opencode` CLI
+  (`OPENCODE_BIN`), with the model list pulled dynamically from
+  `opencode models` (no hardcoded providers). It produces readable summaries,
+  explains/summarizes/answers about any selected span, and suggests
+  knowledge-map links.
+- **Reading flow** — a faithful build of the Gymnasium design handoff: a feed,
+  a reader with select-any-span → Explain / Summarize / Ask, a conversation
+  panel whose whole thread can be **saved** to the knowledge base (FTS5 search
+  across every turn), and an interactive **knowledge map** (drag, manual links,
+  AI-suggested links). One fluid layout spans phone / tablet / desktop; light
+  and dark themes persist.
+
+`pytest` covers the backend offline (AI stubbed via a fake `opencode`, network
+patched, trackers stubbed). `data/` (the SQLite DB and the document store) is
+git-ignored.
+
 ## Notes
 
 This is a private repository for personal study and research curation.
