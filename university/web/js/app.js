@@ -256,7 +256,10 @@
       '<input type="file" id="mdFile" accept=".md,.markdown,text/markdown" hidden>' +
       '</div>';
 
-    return '<div class="gym-read" id="readBody">' +
+    // A real <article> with a single <h1> title and <p>/markdown body lets
+    // Safari detect the reading content and offer Reader Mode (a Safari UI
+    // feature that cannot be automated). id=readBody stays here for selection.
+    return '<article class="gym-read" id="readBody">' +
       '<button class="gym-press reader-back" style="display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px 0 8px;border:none;background:none;color:var(--fg-3);cursor:pointer;font:600 14px/1 var(--font-sans);margin-bottom:12px;border-radius:8px">' + ico(ICON.back, 'style="width:18px;height:18px"') + (it.kind === 'repo' ? 'Repos' : 'Papers') + '</button>' +
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">' +
         '<span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font:700 11px/1.4 var(--font-sans);background:var(--spark-100);color:var(--spark-700)">' + kindLabel + '</span>' + tags +
@@ -281,7 +284,7 @@
         'Select any text to explain, summarize, or ask — or tap an <span style="border-bottom:2px solid var(--spark-400);color:var(--spark-700)">underlined term</span>.' +
       '</div>' +
       bodyHTML +
-    '</div>';
+    '</article>';
   }
 
   // ====================================================================
