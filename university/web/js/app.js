@@ -30,7 +30,8 @@
     plus: '<path d="M12 5v14M5 12h14"></path>',
     check: '<path d="M5 12l4 4 10-10"></path>',
     chevron: '<path d="M6 9l6 6 6-6"></path>',
-    refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"></path><path d="M21 4v5h-5"></path>'
+    refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"></path><path d="M21 4v5h-5"></path>',
+    trash: '<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6"></path>'
   };
 
   // ---- theme ---------------------------------------------------------------
@@ -132,7 +133,8 @@
     if (days < 30) return Math.floor(days / 7) + 'w ago';
     return Math.floor(days / 30) + 'mo ago';
   }
-  function feedCard(item) {
+  function feedCard(item, opts) {
+    opts = (opts && opts.removable) ? opts : null;  // map() passes an index 2nd arg
     var kindLabel = item.kind === 'repo' ? 'Repo' : 'Paper';
     var why = S.density === 'comfort' && item.why
       ? '<p style="font:500 15px/1.55 var(--font-sans);color:var(--fg-2)">' + esc(item.why) + '</p>' : '';
@@ -147,12 +149,16 @@
       metaLeft = '<span style="font:600 12px/1.4 var(--font-sans);color:var(--fg-3)">' + esc(item.source || '') + '</span>';
     }
     var ratingLabel = item.kind === 'repo' ? 'Stars' : 'Impact';
+    var removeBtn = opts
+      ? '<button class="gym-press feed-remove" data-id="' + item.id + '" type="button" aria-label="Remove" title="Remove" style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;background:none;border-radius:8px;cursor:pointer;color:var(--fg-muted)">' + ico(ICON.trash, 'style="width:17px;height:17px"') + '</button>'
+      : '';
     return '' +
       '<article class="gym-card feed-card" data-id="' + item.id + '" style="background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px;box-shadow:var(--shadow-1);padding:16px 18px;cursor:pointer;display:flex;flex-direction:column;gap:10px">' +
         '<div style="display:flex;align-items:center;gap:10px">' +
           '<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font:700 11px/1.4 var(--font-sans);background:var(--spark-100);color:var(--spark-700)">' + kindLabel + '</span>' +
           metaLeft +
           '<span style="margin-left:auto;font:600 12px/1.4 var(--font-sans);color:var(--fg-muted)">' + esc(recency(item.published_at)) + '</span>' +
+          removeBtn +
         '</div>' +
         '<h3 style="font:700 19px/1.3 var(--font-sans);color:var(--fg-1);letter-spacing:-.01em">' + esc(item.title) + '</h3>' +
         why +
@@ -227,13 +233,13 @@
   function renderAdded() {
     var items = S.feeds.added.items;
     var cards = items.length
-      ? items.map(feedCard).join('')
-      : '<div style="text-align:center;padding:44px 24px;color:var(--fg-3);font:500 15px/1.5 var(--font-sans)">No articles yet. Paste a link above to add your first one.</div>';
+      ? items.map(function (it) { return feedCard(it, { removable: true }); }).join('')
+      : '<div style="text-align:center;padding:44px 24px;color:var(--fg-3);font:500 15px/1.5 var(--font-sans)">No items yet. Paste an article or GitHub repo link above to add your first one.</div>';
     return '' +
       '<h1 style="font:700 32px/1.1 var(--font-display);letter-spacing:-.02em;color:var(--fg-1)">Added</h1>' +
-      '<p style="font:500 15px/1.5 var(--font-sans);color:var(--fg-3);margin-top:6px">Articles you added with a link. Open one to read it like any other.</p>' +
+      '<p style="font:500 15px/1.5 var(--font-sans);color:var(--fg-3);margin-top:6px">Papers and repos you added with a link. Open one to read it like any other; remove one with the trash button.</p>' +
       '<form id="addForm" style="display:flex;flex-direction:column;gap:10px;margin:18px 0 22px;background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px;box-shadow:var(--shadow-1);padding:16px 18px">' +
-        '<input class="gym-term-input" id="addUrl" type="url" placeholder="Paste an article link…" autocomplete="off" />' +
+        '<input class="gym-term-input" id="addUrl" type="url" placeholder="Paste an article or GitHub repo link…" autocomplete="off" />' +
         '<input class="gym-term-input" id="addTitle" type="text" placeholder="Title (optional)" autocomplete="off" />' +
         '<div style="display:flex;justify-content:flex-end">' +
           '<button class="btn-spark" id="addBtn" type="submit">' + ico(ICON.plus, 'style="width:16px;height:16px;stroke-width:2.2"') + 'Add article</button>' +
@@ -261,7 +267,15 @@
       loadAdded();
       // Open the new article straight away (returning to Added on Back).
       if (res && res.id) { S.readerReturn = '#/added'; navigate('reader', { id: res.id }); }
-    }).catch(function () { toast('Could not add article'); if (btn) btn.disabled = false; });
+    }).catch(function () { toast('Could not add'); if (btn) btn.disabled = false; });
+  }
+  function removeAdded(id) {
+    if (!id) return;
+    if (!window.confirm('Remove this from your Added list?')) return;
+    API.deleteItem(id).then(function () {
+      toast('Removed');
+      loadAdded();
+    }).catch(function () { toast('Could not remove'); });
   }
 
   // ====================================================================
@@ -1058,6 +1072,8 @@
         navigate(S.screen);
         return;
       }
+      var rm = e.target.closest('.feed-remove');
+      if (rm) { e.stopPropagation(); removeAdded(parseInt(rm.getAttribute('data-id'), 10)); return; }
       var card = e.target.closest('.feed-card, .feed-read');
       if (card) {
         var id = card.getAttribute('data-id');

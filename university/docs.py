@@ -285,6 +285,26 @@ def _item_dir_rel(item: sqlite3.Row) -> str:
     return os.path.join("papers", _paper_dir_slug(item, raw))
 
 
+def remove_item_dir(item: sqlite3.Row, docs_dir: str) -> None:
+    """Best-effort remove an item's on-disk document folder. Never raises.
+
+    Used when a user-added item is deleted. Path-guarded against escaping
+    ``docs_dir`` and a no-op when the folder is absent.
+    """
+    import shutil
+
+    rel_dir = _item_dir_rel(item)
+    abs_dir = os.path.normpath(os.path.join(docs_dir, rel_dir))
+    root = os.path.abspath(docs_dir)
+    if not os.path.abspath(abs_dir).startswith(root) or os.path.abspath(abs_dir) == root:
+        return
+    try:
+        if os.path.isdir(abs_dir):
+            shutil.rmtree(abs_dir)
+    except OSError as exc:
+        print("[docs] remove dir failed for item {}: {}".format(item["id"], exc))
+
+
 def save_markdown(item: sqlite3.Row, content: str, docs_dir: str) -> str:
     """Write uploaded markdown as ``article.md`` in the item's doc folder.
 

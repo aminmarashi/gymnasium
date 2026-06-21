@@ -900,6 +900,155 @@ def test_added_items_excluded_from_tracker_feed(live_server):
     assert all(i["added_by_user"] is True for i in added["items"])
 
 
+def test_github_repo_url_parsing():
+    from university import server
+    # Various GitHub repo URL shapes all resolve to (owner, name).
+    for url in [
+        "https://github.com/acme/widget",
+        "http://github.com/acme/widget",
+        "github.com/acme/widget",
+        "https://www.github.com/acme/widget/",
+        "https://github.com/acme/widget.git",
+        "https://github.com/acme/widget/tree/main/src",
+        "https://github.com/acme/widget?tab=readme-ov-file",
+    ]:
+        assert server._github_repo(url) == ("acme", "widget"), url
+    # A dotted repo name survives (only a trailing .git is stripped).
+    assert server._github_repo("https://github.com/acme/socket.io") == ("acme", "socket.io")
+    # Non-repo URLs (other host, or a bare profile) are not repos -> stay papers.
+    assert server._github_repo("https://example.org/acme/widget") is None
+    assert server._github_repo("https://github.com/acme") is None
+    assert server._github_repo("https://arxiv.org/abs/2601.00001") is None
+
+
+def test_add_item_github_repo_creates_repo(live_server, tmp_path):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+
+    # A GitHub URL (trailing slash) becomes a kind=repo added item.
+    status, res, _ = _http("POST", base + "/api/items",
+                           {"url": "https://github.com/acme/widget/"}, cookie=cookie)
+    assert status == 200 and res["kind"] == "repo"
+    rid = res["id"]
+
+    # owner/name/full_name/html_url are parsed into raw_json (read straight from
+    # the same on-disk DB the live server uses, under the shared tmp_path).
+    c = db.connect(str(tmp_path / "g.db"))
+    row = c.execute("SELECT kind, external_id, source, added_by_user, raw_json, title "
+                    "FROM corpus_item WHERE id=?", (rid,)).fetchone()
+    c.close()
+    assert row["kind"] == "repo"
+    assert row["external_id"] == "acme/widget"
+    assert row["source"] == "Added by you"
+    assert row["added_by_user"] == 1
+    assert row["title"] == "acme/widget"  # falls back to full_name
+    raw = json.loads(row["raw_json"])
+    assert raw["owner"] == "acme" and raw["name"] == "widget"
+    assert raw["full_name"] == "acme/widget"
+    assert raw["html_url"] == "https://github.com/acme/widget"
+
+    # Re-adding the same repo (different URL shape) dedupes onto the same row.
+    status, res2, _ = _http("POST", base + "/api/items",
+                            {"url": "https://github.com/acme/widget.git",
+                             "title": "Widget"}, cookie=cookie)
+    assert status == 200 and res2["id"] == rid
+
+    # Also add a paper so the Added feed holds BOTH kinds.
+    status, pres, _ = _http("POST", base + "/api/items",
+                            {"url": "https://example.org/p", "title": "Added Paper"},
+                            cookie=cookie)
+    pid = pres["id"]
+
+    status, added, _ = _http("GET", base + "/api/feed?added=1", cookie=cookie)
+    kinds = {i["id"]: i["kind"] for i in added["items"]}
+    assert kinds.get(rid) == "repo" and kinds.get(pid) == "paper"
+    assert [i["id"] for i in added["items"]].count(rid) == 1  # no duplicate
+
+    # The added repo is EXCLUDED from the tracker Repos feed.
+    status, repos, _ = _http("GET", base + "/api/feed?kind=repo", cookie=cookie)
+    assert rid not in [i["id"] for i in repos["items"]]
+    assert all(i["added_by_user"] is False for i in repos["items"])
+
+    # Opening the added repo renders its README markdown (fake _fetch -> FAKEDOC).
+    status, item, _ = _http("GET", base + "/api/item/{}".format(rid), cookie=cookie)
+    assert status == 200 and item["markdown_available"] is True
+    status, body, ctype = _http_raw(
+        "GET", base + "/api/item/{}/markdown".format(rid), cookie=cookie)
+    assert status == 200 and body.decode("utf-8") == "FAKEDOC"
+    assert "text/markdown" in ctype
+
+
+def test_delete_added_item_and_protects_tracker(live_server, tmp_path):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+
+    # gated without a cookie
+    status, _, _ = _http("DELETE", base + "/api/items/1")
+    assert status == 401
+
+    # A tracker item (added_by_user=0) can NEVER be removed -> 403.
+    status, feed, _ = _http("GET", base + "/api/feed", cookie=cookie)
+    tracker_id = feed["items"][0]["id"]
+    status, _, _ = _http("DELETE", base + "/api/items/{}".format(tracker_id), cookie=cookie)
+    assert status == 403
+    # still present
+    status, feed, _ = _http("GET", base + "/api/feed", cookie=cookie)
+    assert tracker_id in [i["id"] for i in feed["items"]]
+
+    # Add an item, then its on-disk doc folder, then DELETE it.
+    status, res, _ = _http("POST", base + "/api/items",
+                           {"url": "https://github.com/acme/widget"}, cookie=cookie)
+    rid = res["id"]
+    # Materialize the document folder on disk by opening the item.
+    _http_raw("GET", base + "/api/item/{}/markdown".format(rid), cookie=cookie)
+    repo_dir = tmp_path / "documents" / "repos" / "acme__widget"
+    assert repo_dir.is_dir()
+
+    status, out, _ = _http("DELETE", base + "/api/items/{}".format(rid), cookie=cookie)
+    assert status == 200 and out["ok"] is True
+    # Gone from the Added feed and its doc folder is removed.
+    status, added, _ = _http("GET", base + "/api/feed?added=1", cookie=cookie)
+    assert rid not in [i["id"] for i in added["items"]]
+    assert not repo_dir.exists()
+
+    # Deleting a now-missing id -> 404.
+    status, _, _ = _http("DELETE", base + "/api/items/{}".format(rid), cookie=cookie)
+    assert status == 404
+
+
+def test_delete_added_item_keeps_kb_entry(live_server, tmp_path):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+
+    status, res, _ = _http("POST", base + "/api/items",
+                           {"url": "https://example.org/keepme", "title": "Keep Me"},
+                           cookie=cookie)
+    rid = res["id"]
+    # Save a KB entry tied to the added item.
+    status, ask, _ = _http("POST", base + "/api/ask", {
+        "span_text": "something", "item_id": rid, "mode": "explain",
+        "model": "openai/gpt-fake"}, cookie=cookie)
+    status, saved, _ = _http("POST", base + "/api/kb/save", {
+        "span_text": "something", "item_id": rid, "mode": "explain",
+        "model": "openai/gpt-fake", "answer": ask["answer"]}, cookie=cookie)
+    entry_id = saved["entry"]["id"]
+
+    # Deleting the item leaves the KB entry intact (item_id dropped to NULL).
+    status, _, _ = _http("DELETE", base + "/api/items/{}".format(rid), cookie=cookie)
+    assert status == 200
+    status, full, _ = _http("GET", base + "/api/kb/{}".format(entry_id), cookie=cookie)
+    assert status == 200
+    assert full["id"] == entry_id
+    assert full["item_id"] is None
+    assert full["messages"]  # content preserved
+
+
 def test_repo_readme_served_as_markdown(live_server):
     base = live_server
     status, _, setck = _http("POST", base + "/api/login",

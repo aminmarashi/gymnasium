@@ -42,6 +42,7 @@
       return request('GET', '/api/feed' + (q.length ? '?' + q.join('&') : ''));
     },
     addItem: function (payload) { return request('POST', '/api/items', payload); },
+    deleteItem: function (id) { return request('DELETE', '/api/items/' + id); },
     facets: function (kind) {
       return request('GET', '/api/feed/facets?kind=' + encodeURIComponent(kind));
     },

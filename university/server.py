@@ -189,6 +189,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._api_feed(query)
             if path == "/api/items" and method == "POST":
                 return self._api_items_create()
+            if path.startswith("/api/items/") and method == "DELETE":
+                return self._api_items_delete(int(path.rsplit("/", 1)[1]))
             if path == "/api/feed/facets" and method == "GET":
                 return self._api_feed_facets(query)
             if path == "/api/summarize" and method == "POST":
@@ -345,19 +347,30 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"items": [self._item_dict(r) for r in items]})
 
     def _api_items_create(self):
-        """Create (or update) a user-added paper from a link.
+        """Create (or update) a user-added item (paper OR GitHub repo) from a link.
 
-        Deduped by ``external_id = url`` so re-adding the same link updates the
-        existing row instead of duplicating it. The title is the provided one,
-        else a best-effort page <title>/og:title, else the URL host. Opening it
-        later works like any article (ensure_document + auto-conversion handle
-        an arbitrary URL).
+        Kind-aware: a ``github.com/<owner>/<name>`` URL becomes a ``repo`` whose
+        ``raw_json`` carries owner/name/full_name/html_url so the existing
+        ``ensure_document`` repo path fetches the README and the reader renders it
+        as markdown. Any other URL stays a ``paper`` exactly as before.
+
+        Deduped by ``external_id`` (the repo full_name, or the URL for a paper)
+        so re-adding the same link updates the existing row instead of
+        duplicating it. The title is the provided one, else — for a paper — a
+        best-effort page <title>/og:title then the URL host, or — for a repo —
+        the ``owner/name`` full_name.
         """
         data = self._read_json()
         url = (data.get("url") or "").strip()
         if not url:
             return self._send_json({"error": "url required"}, status=400)
         title = (data.get("title") or "").strip()
+        repo = _github_repo(url)
+        if repo is not None:
+            return self._create_repo_item(repo, title)
+        return self._create_paper_item(url, title)
+
+    def _create_paper_item(self, url: str, title: str):
         if not title:
             title = _page_title(url) or _url_host(url) or url
         now = utcnow()
@@ -379,7 +392,56 @@ class Handler(BaseHTTPRequestHandler):
                     (url, title, url, now, now))
                 item_id = int(cur.lastrowid)
             self.ctx.conn.commit()
-        self._send_json({"ok": True, "id": item_id})
+        self._send_json({"ok": True, "id": item_id, "kind": "paper"})
+
+    def _create_repo_item(self, repo: Tuple[str, str], title: str):
+        owner, name = repo
+        full_name = "{}/{}".format(owner, name)
+        html_url = "https://github.com/{}".format(full_name)
+        if not title:
+            title = full_name
+        raw = json.dumps({"owner": owner, "name": name,
+                          "full_name": full_name, "html_url": html_url})
+        now = utcnow()
+        with self.ctx.lock:
+            existing = self.ctx.conn.execute(
+                "SELECT id FROM corpus_item WHERE kind='repo' AND external_id=?",
+                (full_name,)).fetchone()
+            if existing is not None:
+                item_id = int(existing["id"])
+                self.ctx.conn.execute(
+                    "UPDATE corpus_item SET title=?, url=?, source=?, added_by_user=1, "
+                    "raw_json=?, published_at=?, ingested_at=? WHERE id=?",
+                    (title, html_url, "Added by you", raw, now, now, item_id))
+            else:
+                cur = self.ctx.conn.execute(
+                    "INSERT INTO corpus_item (kind, external_id, title, source, url, "
+                    "signal, added_by_user, raw_json, published_at, ingested_at) "
+                    "VALUES ('repo', ?, ?, 'Added by you', ?, 0, 1, ?, ?, ?)",
+                    (full_name, title, html_url, raw, now, now))
+                item_id = int(cur.lastrowid)
+            self.ctx.conn.commit()
+        self._send_json({"ok": True, "id": item_id, "kind": "repo"})
+
+    def _api_items_delete(self, item_id: int):
+        """Delete a user-added item (paper or repo). Tracker items are protected.
+
+        Only an ``added_by_user=1`` row may be removed; a tracker item (0) is
+        rejected with 403 so it can never be deleted. The on-disk document folder
+        is removed best-effort (non-fatal). Saved ``kb_entry`` rows are left
+        intact — the FK drops their ``item_id`` to NULL but keeps their content.
+        """
+        with self.ctx.lock:
+            row = self.ctx.conn.execute(
+                "SELECT * FROM corpus_item WHERE id=?", (item_id,)).fetchone()
+            if row is None:
+                return self._send_json({"error": "not found"}, status=404)
+            if not row["added_by_user"]:
+                return self._send_json({"error": "forbidden"}, status=403)
+            docs.remove_item_dir(row, self.ctx.docs_dir)
+            self.ctx.conn.execute("DELETE FROM corpus_item WHERE id=?", (item_id,))
+            self.ctx.conn.commit()
+        self._send_json({"ok": True})
 
     def _api_feed_facets(self, query: Dict):
         kind = (query.get("kind", ["paper"])[0]) or "paper"
@@ -902,6 +964,31 @@ def _parse_multipart_file(raw: bytes, ctype: str) -> Optional[bytes]:
         if fallback is None:
             fallback = body
     return fallback
+
+
+def _github_repo(url: str) -> Optional[Tuple[str, str]]:
+    """Return ``(owner, name)`` when a URL points at a GitHub repository, else None.
+
+    Accepts ``github.com/<owner>/<name>`` with or without a scheme/``www.``,
+    tolerating a trailing slash, a ``.git`` suffix, and any extra path segments
+    or query/fragment. Non-GitHub URLs (and bare ``github.com/<owner>`` profile
+    links) return None so they stay papers.
+    """
+    try:
+        parsed = urlparse(url if "://" in url else "https://" + url)
+    except ValueError:
+        return None
+    if (parsed.netloc or "").lower() not in ("github.com", "www.github.com"):
+        return None
+    parts = [seg for seg in parsed.path.split("/") if seg]
+    if len(parts) < 2:
+        return None
+    owner, name = parts[0], parts[1]
+    if name.endswith(".git"):
+        name = name[:-4]
+    if not owner or not name:
+        return None
+    return owner, name
 
 
 def _url_host(url: str) -> str:
