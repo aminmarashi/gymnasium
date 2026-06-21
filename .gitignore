@@ -9,7 +9,12 @@
 # Environment / secrets
 .env
 .env.*
+!.env.example
 *.local
+
+# Hosting / Cloudflare tunnel runtime
+.runtime/
+logs/
 
 # Python (common for research/scraping tooling)
 __pycache__/
