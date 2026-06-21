@@ -35,11 +35,13 @@
       opts = opts || {};
       var q = [];
       if (kind) q.push('kind=' + encodeURIComponent(kind));
+      if (opts.added) q.push('added=1');
       ['q', 'sort', 'author', 'company', 'publication', 'language', 'limit'].forEach(function (k) {
         if (opts[k] != null && opts[k] !== '') q.push(k + '=' + encodeURIComponent(opts[k]));
       });
       return request('GET', '/api/feed' + (q.length ? '?' + q.join('&') : ''));
     },
+    addItem: function (payload) { return request('POST', '/api/items', payload); },
     facets: function (kind) {
       return request('GET', '/api/feed/facets?kind=' + encodeURIComponent(kind));
     },

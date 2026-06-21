@@ -187,6 +187,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._api_models()
             if path == "/api/feed" and method == "GET":
                 return self._api_feed(query)
+            if path == "/api/items" and method == "POST":
+                return self._api_items_create()
             if path == "/api/feed/facets" and method == "GET":
                 return self._api_feed_facets(query)
             if path == "/api/summarize" and method == "POST":
@@ -304,6 +306,7 @@ class Handler(BaseHTTPRequestHandler):
             "doc_path": row["doc_path"],
             "has_markdown": bool(row["markdown_path"]),
             "markdown_source": row["markdown_source"],
+            "added_by_user": bool(row["added_by_user"]),
             "tags": [t for t in tag_list if t][:3],
         }
         # Fields the cards / filters need (authors, company, publication, language).
@@ -315,6 +318,7 @@ class Handler(BaseHTTPRequestHandler):
         limit = int(query.get("limit", ["50"])[0] or 50)
         q = (query.get("q", [""])[0] or "").strip()
         sort = (query.get("sort", ["recency"])[0] or "recency")
+        added = (query.get("added", [None])[0] or "").strip().lower() in ("1", "true", "yes")
         filters = {
             "author": query.get("author", [None])[0],
             "company": query.get("company", [None])[0],
@@ -322,14 +326,60 @@ class Handler(BaseHTTPRequestHandler):
             "language": query.get("language", [None])[0],
         }
         sql = "SELECT * FROM corpus_item"
+        clauses = []
         params = []
         if kind in ("paper", "repo"):
-            sql += " WHERE kind=?"
+            clauses.append("kind=?")
             params.append(kind)
+        if added:
+            # The "Added" view: only user-added items.
+            clauses.append("COALESCE(added_by_user, 0) = 1")
+        else:
+            # The tracker feeds never surface user-added items.
+            clauses.append("COALESCE(added_by_user, 0) = 0")
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
         with self.ctx.lock:
             rows = self.ctx.conn.execute(sql, params).fetchall()
         items = feed.select(rows, q=q, sort=sort, filters=filters, limit=limit)
         self._send_json({"items": [self._item_dict(r) for r in items]})
+
+    def _api_items_create(self):
+        """Create (or update) a user-added paper from a link.
+
+        Deduped by ``external_id = url`` so re-adding the same link updates the
+        existing row instead of duplicating it. The title is the provided one,
+        else a best-effort page <title>/og:title, else the URL host. Opening it
+        later works like any article (ensure_document + auto-conversion handle
+        an arbitrary URL).
+        """
+        data = self._read_json()
+        url = (data.get("url") or "").strip()
+        if not url:
+            return self._send_json({"error": "url required"}, status=400)
+        title = (data.get("title") or "").strip()
+        if not title:
+            title = _page_title(url) or _url_host(url) or url
+        now = utcnow()
+        with self.ctx.lock:
+            existing = self.ctx.conn.execute(
+                "SELECT id FROM corpus_item WHERE kind='paper' AND external_id=?",
+                (url,)).fetchone()
+            if existing is not None:
+                item_id = int(existing["id"])
+                self.ctx.conn.execute(
+                    "UPDATE corpus_item SET title=?, url=?, source=?, "
+                    "added_by_user=1, published_at=?, ingested_at=? WHERE id=?",
+                    (title, url, "Added by you", now, now, item_id))
+            else:
+                cur = self.ctx.conn.execute(
+                    "INSERT INTO corpus_item (kind, external_id, title, source, url, "
+                    "signal, added_by_user, published_at, ingested_at) "
+                    "VALUES ('paper', ?, ?, 'Added by you', ?, 0, 1, ?, ?)",
+                    (url, title, url, now, now))
+                item_id = int(cur.lastrowid)
+            self.ctx.conn.commit()
+        self._send_json({"ok": True, "id": item_id})
 
     def _api_feed_facets(self, query: Dict):
         kind = (query.get("kind", ["paper"])[0]) or "paper"
@@ -852,6 +902,42 @@ def _parse_multipart_file(raw: bytes, ctype: str) -> Optional[bytes]:
         if fallback is None:
             fallback = body
     return fallback
+
+
+def _url_host(url: str) -> str:
+    """The host of a URL, used as a last-resort title for an added article."""
+    try:
+        return urlparse(url).netloc or ""
+    except ValueError:
+        return ""
+
+
+def _page_title(url: str) -> Optional[str]:
+    """Best-effort <title>/og:title for an added link. Non-fatal; None on failure.
+
+    Reuses ``docs._fetch`` (bounded timeout, never raises) so a slow or down
+    page can't block adding the article — the caller falls back to the host.
+    """
+    data = docs._fetch(url)
+    if not data:
+        return None
+    try:
+        html = data.decode("utf-8", "ignore")
+    except Exception:
+        return None
+    m = _re.search(
+        r'<meta[^>]+(?:property|name)=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+        html, _re.IGNORECASE)
+    if not m:
+        m = _re.search(
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']og:title["\']',
+            html, _re.IGNORECASE)
+    if m:
+        return _re.sub(r"\s+", " ", m.group(1)).strip() or None
+    m = _re.search(r"<title[^>]*>(.*?)</title>", html, _re.IGNORECASE | _re.DOTALL)
+    if m:
+        return _re.sub(r"\s+", " ", m.group(1)).strip() or None
+    return None
 
 
 def _fts_tokens(q: str):

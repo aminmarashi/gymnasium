@@ -44,6 +44,52 @@
   }
   function toggleTheme() { S.theme = S.theme === 'light' ? 'dark' : 'light'; S.saveTheme(); applyTheme(); }
 
+  // ---- collapsible rail ----------------------------------------------------
+  function applyRail() {
+    $('app').classList.toggle('rail-collapsed', !!S.railCollapsed);
+    var rc = $('railCollapse');
+    if (rc) rc.setAttribute('aria-label', S.railCollapsed ? 'Expand sidebar' : 'Collapse sidebar');
+  }
+  function toggleRail() { S.railCollapsed = !S.railCollapsed; S.saveRail(); applyRail(); }
+
+  // ---- account menu (profile / log out) ------------------------------------
+  function accountMenuOpen() { return !$('accountMenu').hidden; }
+  function closeAccountMenu() {
+    var m = $('accountMenu');
+    m.hidden = true; m.innerHTML = '';
+  }
+  function openAccountMenu(trigger) {
+    var m = $('accountMenu');
+    var name = (S.user && S.user.username) || $('railUserName').textContent || 'You';
+    m.innerHTML =
+      '<div class="account-name">@' + esc(name) + '</div>' +
+      '<div class="account-sub">Signed in</div>' +
+      '<button id="accountLogout" type="button">' +
+        ico('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path>', 'style="width:17px;height:17px"') +
+        'Log out</button>';
+    m.hidden = false;
+    // Position near the trigger: above it for the rail-user (bottom-left), below
+    // it for the topbar account button (top-right). Off-screen edges are clamped.
+    var r = trigger.getBoundingClientRect();
+    var mw = m.offsetWidth, mh = m.offsetHeight;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var below = r.top < vh / 2;
+    var top = below ? r.bottom + 6 : r.top - mh - 6;
+    var left = trigger.id === 'topbarAccount' ? r.right - mw : r.left;
+    left = Math.max(8, Math.min(left, vw - mw - 8));
+    top = Math.max(8, Math.min(top, vh - mh - 8));
+    m.style.left = left + 'px';
+    m.style.top = top + 'px';
+  }
+  function toggleAccountMenu(trigger) {
+    if (accountMenuOpen()) closeAccountMenu(); else openAccountMenu(trigger);
+  }
+  function logout() {
+    closeAccountMenu();
+    API.logout().then(function () { window.location.href = '/'; })
+      .catch(function () { window.location.href = '/'; });
+  }
+
   // ---- toast ---------------------------------------------------------------
   var toastTimer = null;
   function toast(msg) {
@@ -55,7 +101,7 @@
   }
 
   // ---- nav -----------------------------------------------------------------
-  var SECTION = { papers: 'Papers', repos: 'Repos', reader: 'Reader', saved: 'Knowledge base', map: 'Knowledge map' };
+  var SECTION = { papers: 'Papers', repos: 'Repos', added: 'Added', reader: 'Reader', saved: 'Knowledge base', map: 'Knowledge map' };
   function kindFor(screen) { return screen === 'repos' ? 'repo' : 'paper'; }
   function setNavActive() {
     var screen = S.screen;
@@ -173,6 +219,49 @@
         '<span style="flex:1"></span>' + filters +
       '</div>' +
       '<div style="display:flex;flex-direction:column;gap:14px">' + cards + '</div>';
+  }
+
+  // ====================================================================
+  // ADDED (self-added articles)
+  // ====================================================================
+  function renderAdded() {
+    var items = S.feeds.added.items;
+    var cards = items.length
+      ? items.map(feedCard).join('')
+      : '<div style="text-align:center;padding:44px 24px;color:var(--fg-3);font:500 15px/1.5 var(--font-sans)">No articles yet. Paste a link above to add your first one.</div>';
+    return '' +
+      '<h1 style="font:700 32px/1.1 var(--font-display);letter-spacing:-.02em;color:var(--fg-1)">Added</h1>' +
+      '<p style="font:500 15px/1.5 var(--font-sans);color:var(--fg-3);margin-top:6px">Articles you added with a link. Open one to read it like any other.</p>' +
+      '<form id="addForm" style="display:flex;flex-direction:column;gap:10px;margin:18px 0 22px;background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px;box-shadow:var(--shadow-1);padding:16px 18px">' +
+        '<input class="gym-term-input" id="addUrl" type="url" placeholder="Paste an article link…" autocomplete="off" />' +
+        '<input class="gym-term-input" id="addTitle" type="text" placeholder="Title (optional)" autocomplete="off" />' +
+        '<div style="display:flex;justify-content:flex-end">' +
+          '<button class="btn-spark" id="addBtn" type="submit">' + ico(ICON.plus, 'style="width:16px;height:16px;stroke-width:2.2"') + 'Add article</button>' +
+        '</div>' +
+      '</form>' +
+      '<div style="display:flex;flex-direction:column;gap:14px">' + cards + '</div>';
+  }
+  function loadAdded() {
+    return API.feed(null, { added: 1, sort: 'recency', limit: 100 }).then(function (res) {
+      S.feeds.added.items = res.items || [];
+      if (S.screen === 'added') render();
+    }).catch(function () {});
+  }
+  function addArticle() {
+    var urlEl = $('addUrl'), titleEl = $('addTitle');
+    var url = (urlEl && urlEl.value || '').trim();
+    if (!url) { toast('Paste a link first'); if (urlEl) urlEl.focus(); return; }
+    var title = (titleEl && titleEl.value || '').trim();
+    var btn = $('addBtn');
+    if (btn) btn.disabled = true;
+    var payload = { url: url };
+    if (title) payload.title = title;
+    API.addItem(payload).then(function (res) {
+      toast('Article added');
+      loadAdded();
+      // Open the new article straight away (returning to Added on Back).
+      if (res && res.id) { S.readerReturn = '#/added'; navigate('reader', { id: res.id }); }
+    }).catch(function () { toast('Could not add article'); if (btn) btn.disabled = false; });
   }
 
   // ====================================================================
@@ -485,6 +574,7 @@
     setNavActive();
     var host = $('screen');
     if (S.screen === 'papers' || S.screen === 'repos') host.innerHTML = renderFeed(kindFor(S.screen));
+    else if (S.screen === 'added') host.innerHTML = renderAdded();
     else if (S.screen === 'reader') host.innerHTML = renderReader();
     else if (S.screen === 'saved') host.innerHTML = renderSaved();
     else if (S.screen === 'map') { host.innerHTML = renderMap(); wireMap(); }
@@ -526,6 +616,7 @@
         filters: filters
       };
     }
+    if (seg === 'added') return { screen: 'added' };
     if (seg === 'saved') {
       return { screen: 'saved', q: sp.get('q') || '' };
     }
@@ -535,6 +626,7 @@
   function buildHash(screen, opts) {
     opts = opts || {};
     if (screen === 'reader') return '#/read/' + opts.id;
+    if (screen === 'added') return '#/added';
     if (screen === 'saved') return '#/saved' + (opts.q ? '?q=' + encodeURIComponent(opts.q) : '');
     if (screen === 'map') return '#/map';
     // papers / repos: serialize this feed's q + sort + active filters.
@@ -570,6 +662,7 @@
       runKbSearch(S.kbQuery, false);
       return;
     }
+    if (r.screen === 'added') { S.readerReturn = '#/added'; go('added'); loadAdded(); return; }
     if (r.screen === 'map') { go('map'); loadMap(); return; }
     // papers / repos: hydrate this feed's state from the hash, then query.
     var fs = S.feeds[r.kind];
@@ -933,6 +1026,20 @@
     $('topbarTheme').addEventListener('click', toggleTheme);
     $('railTheme').addEventListener('click', toggleTheme);
 
+    // Collapsible rail (a toggle in the rail and one in the topbar).
+    $('railCollapse').addEventListener('click', toggleRail);
+    $('topbarCollapse').addEventListener('click', toggleRail);
+
+    // Account menu (profile / log out), reachable on desktop (rail) + phone (topbar).
+    $('railUser').addEventListener('click', function (e) { e.stopPropagation(); toggleAccountMenu($('railUser')); });
+    $('topbarAccount').addEventListener('click', function (e) { e.stopPropagation(); toggleAccountMenu($('topbarAccount')); });
+    $('accountMenu').addEventListener('click', function (e) { if (e.target.closest('#accountLogout')) logout(); });
+    document.addEventListener('click', function (e) {
+      if (!accountMenuOpen()) return;
+      if (e.target.closest('#accountMenu') || e.target.closest('#railUser') || e.target.closest('#topbarAccount')) return;
+      closeAccountMenu();
+    });
+
     document.querySelectorAll('[data-screen]').forEach(function (b) {
       if (b.dataset.screen === 'refresh-trigger') return;
       b.addEventListener('click', function () { navigate(b.dataset.screen); });
@@ -975,6 +1082,10 @@
     $('screen').addEventListener('input', function (e) {
       if (e.target.id === 'kbSearch') onKbSearch(e.target.value);
       else if (e.target.id === 'feedSearch') onFeedSearch(kindFor(S.screen), e.target.value);
+    });
+    // Add-article form (Added screen): submit (button or Enter) posts the link.
+    $('screen').addEventListener('submit', function (e) {
+      if (e.target.id === 'addForm') { e.preventDefault(); addArticle(); }
     });
     $('screen').addEventListener('change', function (e) {
       if (e.target.id === 'mdFile' && e.target.files && e.target.files[0]) {
@@ -1060,6 +1171,7 @@
   // ====================================================================
   function boot() {
     applyTheme();
+    applyRail();
     wireGlobal();
 
     API.me().then(function (me) {

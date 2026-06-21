@@ -174,6 +174,25 @@ def test_bootstrap_adds_markdown_column_on_old_schema():
     db.bootstrap(c)  # idempotent re-run on the migrated DB must not raise
 
 
+def test_bootstrap_adds_added_by_user_column_on_old_schema():
+    """An existing DB whose corpus_item predates added_by_user is migrated."""
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.executescript(
+        "CREATE TABLE corpus_item ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  kind TEXT NOT NULL, external_id TEXT NOT NULL, title TEXT NOT NULL,"
+        "  ingested_at TEXT NOT NULL, raw_json TEXT,"
+        "  UNIQUE (kind, external_id));"
+    )
+    cols = {r["name"] for r in c.execute("PRAGMA table_info(corpus_item)").fetchall()}
+    assert "added_by_user" not in cols
+    db.bootstrap(c)
+    cols = {r["name"] for r in c.execute("PRAGMA table_info(corpus_item)").fetchall()}
+    assert "added_by_user" in cols
+    db.bootstrap(c)  # idempotent re-run on the migrated DB must not raise
+
+
 # --------------------------------------------------------------------------
 # ingest
 # --------------------------------------------------------------------------
@@ -804,6 +823,81 @@ def test_feed_kind_search_and_sort(live_server):
     # paper item dict surfaces authors / company / publication.
     paper = res["items"][0]
     assert "authors" in paper and "company" in paper and "publication" in paper
+
+
+def test_add_item_creates_and_dedupes(live_server):
+    base = live_server
+    # gated without a cookie
+    status, _, _ = _http("POST", base + "/api/items", {"url": "https://example.org/a"})
+    assert status == 401
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+
+    # create with an explicit title
+    status, res, _ = _http("POST", base + "/api/items",
+                           {"url": "https://example.org/a", "title": "My Article"}, cookie=cookie)
+    assert status == 200 and res["id"]
+    item_id = res["id"]
+
+    # appears in the Added feed, flagged added_by_user, source "Added by you"
+    status, feed, _ = _http("GET", base + "/api/feed?added=1", cookie=cookie)
+    added_item = next(i for i in feed["items"] if i["id"] == item_id)
+    assert added_item["added_by_user"] is True
+    assert added_item["title"] == "My Article"
+    assert added_item["source"] == "Added by you"
+
+    # re-adding the same url UPDATES the same row (dedupe), never duplicates
+    status, res2, _ = _http("POST", base + "/api/items",
+                            {"url": "https://example.org/a", "title": "Renamed"}, cookie=cookie)
+    assert status == 200 and res2["id"] == item_id
+    status, feed, _ = _http("GET", base + "/api/feed?added=1", cookie=cookie)
+    assert [i["id"] for i in feed["items"]].count(item_id) == 1
+    assert next(i for i in feed["items"] if i["id"] == item_id)["title"] == "Renamed"
+
+    # url is required
+    status, _, _ = _http("POST", base + "/api/items", {"title": "no url"}, cookie=cookie)
+    assert status == 400
+
+
+def test_add_item_falls_back_to_host_title(live_server):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+    # The fake _fetch returns FAKEDOC (no <title>) -> title falls back to the host.
+    status, res, _ = _http("POST", base + "/api/items",
+                           {"url": "https://blog.example.com/post/42"}, cookie=cookie)
+    assert status == 200
+    status, feed, _ = _http("GET", base + "/api/feed?added=1", cookie=cookie)
+    item = next(i for i in feed["items"] if i["id"] == res["id"])
+    assert item["title"] == "blog.example.com"
+
+
+def test_added_items_excluded_from_tracker_feed(live_server):
+    base = live_server
+    status, _, setck = _http("POST", base + "/api/login",
+                             {"username": "maya", "password": "pw123"})
+    cookie = setck.split(";")[0]
+    status, res, _ = _http("POST", base + "/api/items",
+                           {"url": "https://example.org/added-paper", "title": "Added Paper"},
+                           cookie=cookie)
+    aid = res["id"]
+
+    # The tracker Papers feed (kind=paper) excludes user-added items.
+    status, papers, _ = _http("GET", base + "/api/feed?kind=paper", cookie=cookie)
+    assert aid not in [i["id"] for i in papers["items"]]
+    assert all(i["added_by_user"] is False for i in papers["items"])
+
+    # The default feed (no kind) excludes them too.
+    status, allfeed, _ = _http("GET", base + "/api/feed", cookie=cookie)
+    assert aid not in [i["id"] for i in allfeed["items"]]
+
+    # The Added feed lists ONLY user-added items.
+    status, added, _ = _http("GET", base + "/api/feed?added=1", cookie=cookie)
+    ids = [i["id"] for i in added["items"]]
+    assert aid in ids
+    assert all(i["added_by_user"] is True for i in added["items"])
 
 
 def test_repo_readme_served_as_markdown(live_server):

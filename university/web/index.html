@@ -13,42 +13,56 @@
 
   <!-- Desktop left rail -->
   <aside class="rail" id="rail">
-    <div class="rail-lockup">Gymnasium<span style="color:var(--spark-500)">.</span></div>
-    <button class="gym-nav rail-nav" data-screen="papers">
-      <svg viewBox="0 0 24 24" class="ico"><path d="M4 5h12v14H6a2 2 0 0 1-2-2V5z"></path><path d="M16 8h3a1 1 0 0 1 1 1v8a2 2 0 0 1-2 2"></path><path d="M7 9h6M7 13h6M7 17h4"></path></svg>Papers
+    <div class="rail-head">
+      <div class="rail-lockup">Gymnasium<span style="color:var(--spark-500)">.</span></div>
+      <button class="gym-press rail-collapse" id="railCollapse" aria-label="Collapse sidebar">
+        <svg viewBox="0 0 24 24" class="ico" id="railCollapseIcon"><path d="M15 6l-6 6 6 6"></path></svg>
+      </button>
+    </div>
+    <button class="gym-nav rail-nav" data-screen="papers" title="Papers">
+      <svg viewBox="0 0 24 24" class="ico"><path d="M4 5h12v14H6a2 2 0 0 1-2-2V5z"></path><path d="M16 8h3a1 1 0 0 1 1 1v8a2 2 0 0 1-2 2"></path><path d="M7 9h6M7 13h6M7 17h4"></path></svg><span class="rail-label">Papers</span>
     </button>
-    <button class="gym-nav rail-nav" data-screen="repos">
-      <svg viewBox="0 0 24 24" class="ico"><path d="M9 19c-4 1.5-4-2.5-6-3m12 5v-3.5a3 3 0 0 0-.9-2.3c3-.3 6-1.5 6-6.6a5 5 0 0 0-1.4-3.5 4.7 4.7 0 0 0-.1-3.5s-1.1-.3-3.6 1.3a12 12 0 0 0-6 0C6.1 1.1 5 1.4 5 1.4a4.7 4.7 0 0 0-.1 3.5A5 5 0 0 0 3.5 8.4c0 5 3 6.3 6 6.6a3 3 0 0 0-.9 2.3V21"></path></svg>Repos
+    <button class="gym-nav rail-nav" data-screen="repos" title="Repos">
+      <svg viewBox="0 0 24 24" class="ico"><path d="M9 19c-4 1.5-4-2.5-6-3m12 5v-3.5a3 3 0 0 0-.9-2.3c3-.3 6-1.5 6-6.6a5 5 0 0 0-1.4-3.5 4.7 4.7 0 0 0-.1-3.5s-1.1-.3-3.6 1.3a12 12 0 0 0-6 0C6.1 1.1 5 1.4 5 1.4a4.7 4.7 0 0 0-.1 3.5A5 5 0 0 0 3.5 8.4c0 5 3 6.3 6 6.6a3 3 0 0 0-.9 2.3V21"></path></svg><span class="rail-label">Repos</span>
     </button>
-    <button class="gym-nav rail-nav" data-screen="saved">
-      <svg viewBox="0 0 24 24" class="ico"><path d="M6 4h12v16l-6-4-6 4V4z"></path></svg>Knowledge base
+    <button class="gym-nav rail-nav" data-screen="added" title="Added">
+      <svg viewBox="0 0 24 24" class="ico"><path d="M12 5v14M5 12h14"></path></svg><span class="rail-label">Added</span>
     </button>
-    <button class="gym-nav rail-nav" data-screen="map">
-      <svg viewBox="0 0 24 24" class="ico"><circle cx="6" cy="6" r="2.4"></circle><circle cx="18" cy="9" r="2.4"></circle><circle cx="9" cy="18" r="2.4"></circle><path d="M8 7l8 1.4M8.6 16 16 11"></path></svg>Knowledge map
+    <button class="gym-nav rail-nav" data-screen="saved" title="Knowledge base">
+      <svg viewBox="0 0 24 24" class="ico"><path d="M6 4h12v16l-6-4-6 4V4z"></path></svg><span class="rail-label">Knowledge base</span>
     </button>
-    <button class="gym-nav rail-nav" data-screen="refresh-trigger" id="railRefresh">
-      <svg viewBox="0 0 24 24" class="ico"><path d="M21 12a9 9 0 1 1-2.6-6.4"></path><path d="M21 4v5h-5"></path></svg>Refresh feed
+    <button class="gym-nav rail-nav" data-screen="map" title="Knowledge map">
+      <svg viewBox="0 0 24 24" class="ico"><circle cx="6" cy="6" r="2.4"></circle><circle cx="18" cy="9" r="2.4"></circle><circle cx="9" cy="18" r="2.4"></circle><path d="M8 7l8 1.4M8.6 16 16 11"></path></svg><span class="rail-label">Knowledge map</span>
+    </button>
+    <button class="gym-nav rail-nav" data-screen="refresh-trigger" id="railRefresh" title="Refresh feed">
+      <svg viewBox="0 0 24 24" class="ico"><path d="M21 12a9 9 0 1 1-2.6-6.4"></path><path d="M21 4v5h-5"></path></svg><span class="rail-label">Refresh feed</span>
     </button>
     <div class="rail-spacer"></div>
-    <button class="gym-nav rail-nav" id="railTheme" data-action="theme">
-      <svg viewBox="0 0 24 24" class="ico" id="railThemeIcon"></svg><span id="railThemeLabel">Dark</span> theme
+    <button class="gym-nav rail-nav" id="railTheme" data-action="theme" title="Toggle theme">
+      <svg viewBox="0 0 24 24" class="ico" id="railThemeIcon"></svg><span class="rail-label"><span id="railThemeLabel">Dark</span> theme</span>
     </button>
-    <div class="rail-user">
+    <button class="rail-user" id="railUser" type="button" aria-haspopup="menu" title="Account">
       <span class="rail-avatar" id="railAvatar">·</span>
       <div class="rail-user-meta">
         <div class="rail-user-name" id="railUserName">…</div>
         <div class="rail-user-sub">Studying solo</div>
       </div>
-    </div>
+    </button>
   </aside>
 
   <!-- Main column -->
   <div class="col" id="col">
     <header class="topbar">
+      <button class="gym-press topbar-theme topbar-collapse" id="topbarCollapse" aria-label="Toggle sidebar">
+        <svg viewBox="0 0 24 24" class="ico"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+      </button>
       <span class="topbar-lockup" id="topbarLockup">Gymnasium<span style="color:var(--spark-500)">.</span></span>
       <span class="topbar-section" id="topbarSection"></span>
       <button class="gym-press topbar-theme" id="topbarTheme" aria-label="Toggle theme">
         <svg viewBox="0 0 24 24" class="ico" id="topbarThemeIcon"></svg>
+      </button>
+      <button class="gym-press topbar-theme topbar-account" id="topbarAccount" aria-label="Account" aria-haspopup="menu">
+        <svg viewBox="0 0 24 24" class="ico"><circle cx="12" cy="8" r="3.4"></circle><path d="M5.5 20a6.5 6.5 0 0 1 13 0"></path></svg>
       </button>
     </header>
 
@@ -60,6 +74,7 @@
     <nav class="tabbar" id="tabbar">
       <button class="gym-tab" data-screen="papers"><svg viewBox="0 0 24 24" class="ico"><path d="M4 5h12v14H6a2 2 0 0 1-2-2V5z"></path><path d="M16 8h3a1 1 0 0 1 1 1v8a2 2 0 0 1-2 2"></path><path d="M7 9h6M7 13h6"></path></svg>Papers</button>
       <button class="gym-tab" data-screen="repos"><svg viewBox="0 0 24 24" class="ico"><path d="M9 19c-4 1.5-4-2.5-6-3m12 5v-3.5a3 3 0 0 0-.9-2.3c3-.3 6-1.5 6-6.6a5 5 0 0 0-1.4-3.5 4.7 4.7 0 0 0-.1-3.5s-1.1-.3-3.6 1.3a12 12 0 0 0-6 0C6.1 1.1 5 1.4 5 1.4a4.7 4.7 0 0 0-.1 3.5A5 5 0 0 0 3.5 8.4c0 5 3 6.3 6 6.6a3 3 0 0 0-.9 2.3V21"></path></svg>Repos</button>
+      <button class="gym-tab" data-screen="added"><svg viewBox="0 0 24 24" class="ico"><path d="M12 5v14M5 12h14"></path></svg>Added</button>
       <button class="gym-tab" data-screen="saved"><svg viewBox="0 0 24 24" class="ico"><path d="M6 4h12v16l-6-4-6 4V4z"></path></svg>Saved</button>
       <button class="gym-tab" data-screen="map"><svg viewBox="0 0 24 24" class="ico"><circle cx="6" cy="6" r="2.2"></circle><circle cx="18" cy="9" r="2.2"></circle><circle cx="9" cy="18" r="2.2"></circle><path d="M8 7l8 1.4M8.6 16 16 11"></path></svg>Map</button>
     </nav>
@@ -78,6 +93,9 @@
     <!-- Toast -->
     <div class="toast" id="toast" hidden></div>
   </div>
+
+  <!-- Account menu (profile / log out) -->
+  <div class="account-menu" id="accountMenu" hidden></div>
 </div>
 
 <script src="/js/vendor/snarkdown.js"></script>

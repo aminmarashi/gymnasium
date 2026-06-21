@@ -44,9 +44,20 @@ body { min-height: 100%; }
 
 /* ---- Left rail (desktop only) ---- */
 .rail { display: none; }
+.rail-head {
+  display: flex; align-items: center; gap: 8px; padding: 0 4px 18px;
+}
 .rail-lockup {
+  flex: 1; min-width: 0;
   font: 700 23px/1 var(--font-display); letter-spacing: -.02em;
-  color: var(--fg-1); padding: 6px 10px 18px;
+  color: var(--fg-1); padding: 6px 6px;
+  white-space: nowrap; overflow: hidden;
+}
+.rail-collapse {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; flex: 0 0 auto; cursor: pointer;
+  border: 1px solid var(--border-hair); background: var(--bg-surface);
+  border-radius: 8px; color: var(--fg-2);
 }
 .rail-nav {
   display: flex; align-items: center; gap: 11px;
@@ -54,11 +65,14 @@ body { min-height: 100%; }
   color: var(--fg-2); border-radius: 10px; cursor: pointer;
   font: 600 15px/1 var(--font-sans); text-align: left; width: 100%;
 }
+.rail-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .rail-spacer { flex: 1; }
 .rail-user {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 8px 2px; border-top: 1px solid var(--border-hair); margin-top: 6px;
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 8px 2px; border: none; border-top: 1px solid var(--border-hair);
+  margin-top: 6px; background: none; cursor: pointer; font: inherit;
 }
+.rail-user:hover { background: var(--paper-200); }
 .rail-avatar {
   width: 32px; height: 32px; border-radius: 50%; background: var(--berry-500);
   color: #fff; display: flex; align-items: center; justify-content: center;
@@ -86,6 +100,32 @@ body { min-height: 100%; }
   width: 40px; height: 40px; border: 1px solid var(--border-hair);
   background: var(--bg-surface); border-radius: 10px; color: var(--fg-2); cursor: pointer;
 }
+/* The sidebar toggle in the topbar only matters where the rail is shown
+   (desktop); the account button matters where the rail is hidden (phone/tablet). */
+.topbar-collapse { display: none; }
+.topbar-account { display: inline-flex; }
+
+/* ---- Account menu (profile / log out) ---- */
+.account-menu {
+  position: fixed; z-index: 70; min-width: 200px;
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: 12px; box-shadow: var(--shadow-3); padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.account-menu .account-name {
+  font: 700 14px/1.3 var(--font-sans); color: var(--fg-1); padding: 9px 10px 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.account-menu .account-sub {
+  font: 600 11px/1.3 var(--font-sans); color: var(--fg-muted);
+  padding: 0 10px 8px; border-bottom: 1px solid var(--border-hair); margin-bottom: 4px;
+}
+.account-menu button {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  border: none; background: none; cursor: pointer; border-radius: 8px;
+  padding: 9px 10px; min-height: 38px; font: 600 14px/1 var(--font-sans); color: var(--fg-1);
+}
+.account-menu button:hover { background: var(--paper-200); }
 
 /* ---- Scroll + content measure ---- */
 .scroll { flex: 1; min-height: 0; overflow: auto; background: var(--bg-page); }
@@ -137,8 +177,24 @@ body { min-height: 100%; }
   }
   .topbar-lockup { display: none; }
   .topbar-section { display: block; }
+  .topbar-collapse { display: inline-flex; }
+  .topbar-account { display: none; }
   .tabbar { display: none; }
   .content { max-width: 780px; padding: 30px 40px 64px; }
+
+  /* Collapsed rail: icon-only; the column reclaims the freed width. */
+  .gym-app#app.rail-collapsed .rail {
+    width: 64px; flex: 0 0 64px; padding: 18px 8px;
+  }
+  .gym-app#app.rail-collapsed .rail-lockup,
+  .gym-app#app.rail-collapsed .rail-label,
+  .gym-app#app.rail-collapsed .rail-user-meta { display: none; }
+  .gym-app#app.rail-collapsed .rail-head { justify-content: center; padding: 0 0 18px; }
+  .gym-app#app.rail-collapsed .rail-nav,
+  .gym-app#app.rail-collapsed .rail-user {
+    justify-content: center; padding-left: 0; padding-right: 0; gap: 0;
+  }
+  .gym-app#app.rail-collapsed .rail-collapse svg { transform: rotate(180deg); }
   .scrim { display: none !important; }
   .panel {
     top: 0; right: 0; bottom: 0; left: auto; width: 392px; max-height: none;

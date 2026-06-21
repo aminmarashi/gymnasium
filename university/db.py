@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS corpus_item (
     doc_fetched_at  TEXT,
     markdown_path   TEXT,
     markdown_source TEXT,                     -- 'user' | 'auto'
+    added_by_user   INTEGER DEFAULT 0,        -- 1 = added by the user via a link
     raw_json        TEXT,
     UNIQUE (kind, external_id)
 );
@@ -203,4 +204,5 @@ def bootstrap(conn: sqlite3.Connection) -> None:
     # Migrations for DBs created before a column existed.
     _ensure_column(conn, "corpus_item", "markdown_path", "TEXT")
     _ensure_column(conn, "corpus_item", "markdown_source", "TEXT")
+    _ensure_column(conn, "corpus_item", "added_by_user", "INTEGER DEFAULT 0")
     conn.commit()

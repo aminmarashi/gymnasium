@@ -3,6 +3,7 @@
    one opencode reports. */
 (function () {
   var THEME_KEY = 'gym.theme';
+  var RAIL_KEY = 'gym.rail';
 
   function defaultTheme() {
     var saved = null;
@@ -12,17 +13,23 @@
     return window.matchMedia('(min-width: 901px)').matches ? 'dark' : 'light';
   }
 
+  function defaultRailCollapsed() {
+    try { return localStorage.getItem(RAIL_KEY) === 'collapsed'; } catch (e) { return false; }
+  }
+
   window.State = {
     user: null,
-    screen: 'papers',         // papers | repos | reader | saved | map
+    screen: 'papers',         // papers | repos | reader | saved | map | added
     density: 'comfort',       // comfort | compact
     theme: defaultTheme(),
-    // Two feeds, each carrying its own search / sort / filters / facets.
+    railCollapsed: defaultRailCollapsed(),  // icon-only desktop rail
+    // Two tracker feeds + the user-added feed, each with its own search/sort.
     feeds: {
       paper: { items: [], q: '', sort: 'recency', facets: null,
                filters: { author: '', company: '', publication: '' } },
       repo: { items: [], q: '', sort: 'recency', facets: null,
-              filters: { company: '', language: '' } }
+              filters: { company: '', language: '' } },
+      added: { items: [] }
     },
     readerReturn: '#/papers', // hash to return to from the reader
     item: null,               // current reader item (full dict)
@@ -55,6 +62,9 @@
 
     saveTheme: function () {
       try { localStorage.setItem(THEME_KEY, this.theme); } catch (e) {}
+    },
+    saveRail: function () {
+      try { localStorage.setItem(RAIL_KEY, this.railCollapsed ? 'collapsed' : 'expanded'); } catch (e) {}
     },
     isDesktop: function () { return window.matchMedia('(min-width: 901px)').matches; },
     modelName: function (id) {
