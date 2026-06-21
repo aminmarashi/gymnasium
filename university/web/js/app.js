@@ -201,19 +201,13 @@
     out += esc(text.slice(last));
     return out;
   }
-  // Strip <script> tags and inline on*= handlers from rendered markdown so an
-  // attached file cannot self-XSS the authenticated origin (light safety).
-  function sanitizeHTML(html) {
-    return String(html)
-      .replace(/<script[\s\S]*?<\/script\s*>/gi, '')
-      .replace(/<script\b[^>]*>/gi, '')
-      .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
-      .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
-      .replace(/\son\w+\s*=\s*[^\s>]+/gi, '');
-  }
+  // The ONE hardened markdown renderer lives in md.js (window.MD) so the article
+  // body, attached markdown, repo README and chat all share the same
+  // bracket-hardening (against snarkdown's runaway-link bug) and <script>/on*=
+  // sanitization. Fall back to escaped text if md.js somehow failed to load.
   function renderMarkdownHTML(md) {
-    var html = window.snarkdown ? window.snarkdown(md) : esc(md);
-    return sanitizeHTML(html);
+    if (window.MD) return window.MD.renderMarkdownHTML(md);
+    return esc(md);
   }
   function renderReader() {
     var it = S.item;
@@ -383,7 +377,9 @@
       if (m.role === 'user') {
         return '<div style="align-self:flex-end;max-width:86%;background:var(--sky-500);color:#fff;padding:10px 14px;border-radius:14px 14px 4px 14px;font:500 15px/1.5 var(--font-sans);white-space:pre-wrap">' + esc(m.content) + '</div>';
       }
-      return '<div style="align-self:flex-start;max-width:90%;background:var(--paper-200);color:var(--fg-1);padding:10px 14px;border-radius:14px 14px 14px 4px;font:500 15px/1.6 var(--font-sans);white-space:pre-wrap">' + esc(m.content) + '</div>';
+      // Assistant answers come back as markdown — render them through the same
+      // hardened renderer the article body uses so lists/bold/code/headings show.
+      return '<div class="gym-md" style="align-self:flex-start;max-width:90%;background:var(--paper-200);color:var(--fg-1);padding:10px 14px;border-radius:14px 14px 14px 4px;font:500 15px/1.6 var(--font-sans)">' + renderMarkdownHTML(m.content) + '</div>';
     }).join('');
     var grounded = '';
     var g = S.chatGrounded;
@@ -432,7 +428,8 @@
       if (m.role === 'user') {
         return '<div style="align-self:flex-end;max-width:86%;background:var(--sky-500);color:#fff;padding:10px 14px;border-radius:14px 14px 4px 14px;font:500 15px/1.5 var(--font-sans)">' + esc(m.content) + '</div>';
       }
-      return '<div style="align-self:flex-start;max-width:90%;background:var(--paper-200);color:var(--fg-1);padding:10px 14px;border-radius:14px 14px 14px 4px;font:500 15px/1.6 var(--font-sans);white-space:pre-wrap">' + esc(m.content) + '</div>';
+      // Markdown answer -> hardened renderer (same path as the article body).
+      return '<div class="gym-md" style="align-self:flex-start;max-width:90%;background:var(--paper-200);color:var(--fg-1);padding:10px 14px;border-radius:14px 14px 14px 4px;font:500 15px/1.6 var(--font-sans)">' + renderMarkdownHTML(m.content) + '</div>';
     }).join('');
     var savedConfirm = S.justSaved
       ? '<div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-radius:10px;background:var(--grass-100);color:var(--grass-600);font:600 14px/1.4 var(--font-sans)">' + ico(ICON.check, 'style="width:17px;height:17px;stroke-width:2.6"') + 'Saved to your knowledge base.<button class="gym-press panel-gosaved" style="margin-left:auto;border:none;background:none;color:var(--fg-link);cursor:pointer;font:700 14px/1 var(--font-sans)">Open</button></div>' : '';
@@ -456,7 +453,7 @@
         '<div style="background:var(--bg-surface);border:1px solid var(--border-hair);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:10px">' +
           (loading || (
             '<div style="font:700 19px/1.35 var(--font-display);letter-spacing:-.01em;color:var(--fg-1)">' + esc(a.lead) + '</div>' +
-            '<p style="font:500 16px/1.7 var(--font-sans);color:var(--fg-2);white-space:pre-wrap">' + esc(a.body) + '</p>' + analogy)) +
+            '<div class="gym-md" style="font:500 16px/1.7 var(--font-sans);color:var(--fg-2)">' + renderMarkdownHTML(a.body) + '</div>' + analogy)) +
         '</div>' +
         thread + savedConfirm +
       '</div>' +
