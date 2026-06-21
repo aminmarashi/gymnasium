@@ -128,8 +128,17 @@ body { min-height: 100%; }
 .account-menu button:hover { background: var(--paper-200); }
 
 /* ---- Scroll + content measure ---- */
-.scroll { flex: 1; min-height: 0; overflow: auto; background: var(--bg-page); }
+/* overflow-x:hidden is a backstop so nothing inside the column can ever cause a
+   horizontal page scroll on mobile (the article fixes live in gym.css). */
+.scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; background: var(--bg-page); }
 .content { max-width: 100%; margin: 0 auto; padding: 16px 16px 92px; }
+
+/* Belt-and-suspenders against horizontal page scroll on small screens. */
+html, body { overflow-x: hidden; }
+
+/* iOS Safari auto-zooms a focused field whose font-size is < 16px. Keep every
+   text field at >=16px so focusing a search box / input / select never zooms. */
+input, textarea, select { font-size: 16px; }
 
 /* ---- Phone bottom tab bar ---- */
 .tabbar {
@@ -202,6 +211,33 @@ body { min-height: 100%; }
     animation: gymIn .26s var(--ease-out);
   }
 }
+
+/* ============================================================
+   IMAGE VIEWER (lightbox) — tap a reader figure to open it full
+   size in a scrollable pane so large figures can be panned.
+   ============================================================ */
+.img-viewer {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(10, 8, 4, .92);
+  display: flex; animation: gymFade .18s var(--ease-out);
+}
+.img-viewer-pane {
+  flex: 1; min-width: 0; min-height: 0;
+  overflow: auto; -webkit-overflow-scrolling: touch;
+  display: flex; padding: 24px;
+}
+/* margin:auto centers a small image yet keeps a larger-than-viewport image
+   reachable from the top-left when the pane scrolls (the flexbox-overflow fix). */
+.img-viewer-pane img {
+  margin: auto; max-width: none; height: auto; display: block;
+}
+.img-viewer-close {
+  position: fixed; top: 14px; right: 14px; z-index: 91;
+  width: 44px; height: 44px; border-radius: 50%; cursor: pointer;
+  border: none; background: rgba(0, 0, 0, .55); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.img-viewer-close:hover { background: rgba(0, 0, 0, .75); }
 
 /* ============================================================
    LOGIN

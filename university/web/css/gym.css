@@ -68,7 +68,22 @@
 .gym-app.dark .gym-read ::selection { background: #6a4422; color: #fff; }
 
 /* Figures from converted articles fit the reading column instead of overflowing. */
-.gym-read img { max-width: 100%; height: auto; }
+.gym-read img { max-width: 100%; height: auto; cursor: zoom-in; }
+
+/* iOS / small screens: the rendered article must never widen the page.
+   Long tokens & URLs wrap mid-word; pre/code blocks and tables scroll inside
+   their OWN box instead of pushing the page wide. Normal prose still wraps at
+   spaces as usual. Covers both the reader (.gym-read) and any markdown surface
+   (.gym-md: chat, summaries, README). */
+.gym-read, .gym-md { overflow-wrap: anywhere; word-break: break-word; }
+.gym-read pre, .gym-md pre {
+  max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;
+}
+/* Inside a <pre>, keep code on its own lines (scroll, don't break tokens). */
+.gym-read pre code, .gym-md pre code { white-space: pre; word-break: normal; }
+.gym-read table, .gym-md table {
+  display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;
+}
 
 /* Learnable terms — quietly underlined, tappable */
 .gym-term {
@@ -140,7 +155,9 @@
 .gym-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: none; background: none; color: var(--fg-3); cursor: pointer; font: 600 11px/1.1 var(--font-sans); min-height: 56px; padding: 6px 0; transition: color .14s var(--ease-out); }
 .gym-tab.on { color: var(--spark-600); }
 
-.gym-term-input { width: 100%; border: 1.5px solid var(--border-default); background: var(--bg-input); color: var(--fg-1); border-radius: 10px; padding: 11px 13px; font: 500 15px/1.4 var(--font-sans); outline: none; }
+/* font-size is 16px so iOS Safari does not auto-zoom when the field is focused
+   (it zooms any focused input/textarea/select below 16px). */
+.gym-term-input { width: 100%; border: 1.5px solid var(--border-default); background: var(--bg-input); color: var(--fg-1); border-radius: 10px; padding: 11px 13px; font: 500 16px/1.4 var(--font-sans); outline: none; }
 .gym-term-input:focus { border-color: var(--border-focus); box-shadow: var(--shadow-focus); }
 .gym-term-input::placeholder { color: var(--ink-300); }
 

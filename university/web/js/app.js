@@ -182,7 +182,7 @@
       opts += '<option value="' + esc(v.value) + '"' + (v.value === current ? ' selected' : '') + '>' + esc(v.value) + ' (' + v.count + ')</option>';
     });
     if (current && !present) opts += '<option value="' + esc(current) + '" selected>' + esc(current) + '</option>';
-    return '<select class="feed-filter" data-filter="' + name + '" style="height:38px;border:1.5px solid var(--border-default);background:var(--bg-input);color:var(--fg-1);border-radius:10px;padding:0 10px;font:500 14px/1 var(--font-sans);cursor:pointer;max-width:200px">' + opts + '</select>';
+    return '<select class="feed-filter" data-filter="' + name + '" style="height:38px;border:1.5px solid var(--border-default);background:var(--bg-input);color:var(--fg-1);border-radius:10px;padding:0 10px;font:500 16px/1 var(--font-sans);cursor:pointer;max-width:200px">' + opts + '</select>';
   }
   function renderFeed(kind) {
     var fs = S.feeds[kind];
@@ -1108,6 +1108,23 @@
     S.panelOpen = false; S.chatMode = false; S.modelMenuOpen = false;
     hideToolbar(); syncPanel();
   }
+
+  // ---- Image viewer (lightbox) ----
+  // Tapping a figure in the reader opens it full size in a scrollable pane.
+  function openImageViewer(src, alt) {
+    var img = $('imgViewerImg');
+    img.src = src;
+    img.alt = alt || '';
+    $('imgViewerPane').scrollTop = 0;
+    $('imgViewerPane').scrollLeft = 0;
+    $('imgViewer').hidden = false;
+  }
+  function closeImageViewer() {
+    var v = $('imgViewer');
+    if (v.hidden) return;
+    v.hidden = true;
+    $('imgViewerImg').removeAttribute('src');
+  }
   function saveEntry() {
     // Concept-based Explain saves the extracted concept(s).
     if (S.mode === 'explain') {
@@ -1328,11 +1345,23 @@
     });
     $('railRefresh').addEventListener('click', triggerRefresh);
 
+    // Image viewer: close on the backdrop, the close button, or Escape.
+    $('imgViewer').addEventListener('click', function (e) {
+      if (!e.target.closest('#imgViewerImg')) closeImageViewer();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !$('imgViewer').hidden) closeImageViewer();
+    });
+
     // Browser Back/Forward (and address-bar hash edits) re-apply the route.
     window.addEventListener('hashchange', applyRoute);
 
     // Screen-level delegation.
     $('screen').addEventListener('click', function (e) {
+      // Tapping a reader figure opens it in the fullscreen viewer. (Text
+      // selection drags don't fire a click, so this won't disturb selecting.)
+      var fig = e.target.closest('.gym-read img');
+      if (fig && fig.getAttribute('src')) { openImageViewer(fig.src, fig.alt); return; }
       var sortBtn = e.target.closest('.feed-sort[data-sort]');
       if (sortBtn) {
         var sk = kindFor(S.screen);
