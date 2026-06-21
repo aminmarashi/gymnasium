@@ -186,16 +186,11 @@ def ingest_reports(reports_dir: str, conn: sqlite3.Connection) -> Dict[str, int]
 
 
 def ingest_latest(reports_dir: str, conn: sqlite3.Connection) -> Dict[str, int]:
-    """Ingest only the newest sidecar per tracker (by filename date+window)."""
-    latest: Dict[str, str] = {}
-    for path in _sidecar_files(reports_dir):
-        tracker = os.path.basename(path).split("_", 1)[0]
-        # filenames sort chronologically because of the YYYY-MM-DD stamp.
-        if tracker not in latest or os.path.basename(path) > os.path.basename(latest[tracker]):
-            latest[tracker] = path
-    new = updated = 0
-    for path in latest.values():
-        n, u = _ingest_payload(conn, _read_sidecar(path))
-        new += n
-        updated += u
-    return {"files": len(latest), "new": new, "updated": updated}
+    """Ingest every sidecar on start.
+
+    Picking only the lexicographically-last filename per tracker would drop a
+    same-day larger-window report (e.g. the 7d sidecar beats the 30d one),
+    skipping the bigger corpus. Upsert dedupes by (kind, external_id), so
+    ingesting all sidecars safely merges overlapping windows.
+    """
+    return ingest_reports(reports_dir, conn)

@@ -97,13 +97,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_bytes(self, data: bytes, content_type: str, status: int = 200,
-                    download_name: Optional[str] = None):
+                    download_name: Optional[str] = None, attachment: bool = False):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         if download_name:
+            disposition = "attachment" if attachment else "inline"
             self.send_header("Content-Disposition",
-                             'inline; filename="{}"'.format(download_name))
+                             '{}; filename="{}"'.format(disposition, download_name))
         self.end_headers()
         self.wfile.write(data)
 
@@ -336,7 +337,21 @@ class Handler(BaseHTTPRequestHandler):
         docs_root = os.path.abspath(self.ctx.docs_dir)
         if not os.path.abspath(abs_path).startswith(docs_root):
             return self._send_json({"error": "forbidden"}, status=403)
-        self._serve_file(abs_path, download_name=os.path.basename(abs_path))
+        if not os.path.isfile(abs_path):
+            return self._send_json({"error": "not found"}, status=404)
+        name = os.path.basename(abs_path)
+        ext = os.path.splitext(abs_path)[1].lower()
+        with open(abs_path, "rb") as fh:
+            data = fh.read()
+        if ext in (".html", ".htm"):
+            # Stored upstream HTML must never run inline on our origin (it would
+            # execute same-origin with the authenticated API — stored XSS). Serve
+            # it as a non-executing attachment instead.
+            self._send_bytes(data, "text/plain; charset=utf-8",
+                             download_name=name, attachment=True)
+        else:
+            ctype = _CONTENT_TYPES.get(ext, "application/octet-stream")
+            self._send_bytes(data, ctype, download_name=name)
 
     # -- summarize ----------------------------------------------------------
     def _api_summarize(self):

@@ -546,7 +546,7 @@
         updateEdgesFor(dragState.id, x, y);
       });
       node.addEventListener('pointerup', function (ev) {
-        if (linkMode) { handleLinkClick(node); return; }
+        if (linkMode) return; // linking handled on click (single path)
         if (!dragState || dragState.node !== node) return;
         node.classList.remove('dragging');
         if (dragState.moved && dragState.x != null) {
