@@ -83,6 +83,36 @@
 .gym-read pre code, .gym-md pre code { white-space: pre; word-break: normal; }
 .gym-read table, .gym-md table {
   display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;
+  border-collapse: collapse; margin: .6em 0;
+}
+.gym-read th, .gym-md th,
+.gym-read td, .gym-md td {
+  border: 1px solid var(--border-hair);
+  padding: .4em .6em;
+  text-align: left;
+}
+.gym-read th, .gym-md th {
+  background: var(--bg-sunken);
+  font-weight: 600;
+}
+
+/* Collapsible <details>/<summary> — a tidy disclosure affordance */
+.gym-read details, .gym-md details {
+  border: 1px solid var(--border-hair);
+  border-radius: 8px;
+  padding: .2em .8em;
+  margin: .6em 0;
+  background: var(--bg-surface);
+}
+.gym-read summary, .gym-md summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: .4em 0;
+  list-style-position: inside;
+}
+.gym-read details[open] summary, .gym-md details[open] summary {
+  margin-bottom: .4em;
+  border-bottom: 1px solid var(--border-hair);
 }
 
 /* Learnable terms — quietly underlined, tappable */
